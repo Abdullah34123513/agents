@@ -17,9 +17,16 @@ Available Tools: {{TOOLS}}
     - A calculation, data processing, or logic task.
     - Access to **real-time data or external information** (news, weather, stock prices, web search) that you cannot answer with your internal knowledge.
     - A specific capability not in the "Available Tools" list.
-2. "CHAT": Use this for general conversation, OR if you can use an EXISTING tool from the list above.
+2. "UPDATE_TOOL": Use this if the user specifically asks to modify, improve, fix, or change the behavior of an EXISTING tool.
+3. "DELETE_TOOL": Use this if the user specifically asks to delete or remove an EXISTING tool.
+4. "CHAT": Use this for general conversation, OR if you can use an EXISTING tool from the list above without modification.
 
-Output JSON: { "action": "BUILD_TOOL" | "CHAT", "details": "precise description of tool to build" }
+Output JSON: 
+{ 
+  "action": "BUILD_TOOL" | "UPDATE_TOOL" | "DELETE_TOOL" | "CHAT", 
+  "toolName": "name of tool to use/build/update/delete",
+  "details": "precise description of tool requirement or update" 
+}
 `;
 
 // In-memory session history
@@ -62,22 +69,51 @@ export const orchestrator = {
       
       const decision = JSON.parse(decisionReq.text);
 
-      // 3. Invoke Builder Agent if needed
-      if (decision.action === 'BUILD_TOOL') {
-        sendEvent({ type: 'text', content: `I see you need a tool for "${decision.details}". I am instructing the Builder Agent to create it now.\n\n` });
+      // --- HANDLE DELETE ---
+      if (decision.action === 'DELETE_TOOL') {
+         const name = decision.toolName;
+         if (toolRegistry.delete(name)) {
+             sendEvent({ type: 'text', content: `I have deleted the tool "${name}" from the registry.` });
+             sendEvent({ type: 'tool_update' }); // Triggers refresh on frontend
+         } else {
+             sendEvent({ type: 'text', content: `I couldn't find a tool named "${name}" to delete.` });
+         }
+         sendEvent({ type: 'done' });
+         return;
+      }
+
+      // --- HANDLE UPDATE or BUILD ---
+      if (decision.action === 'BUILD_TOOL' || decision.action === 'UPDATE_TOOL') {
+        const isUpdate = decision.action === 'UPDATE_TOOL';
+        const msg = isUpdate 
+           ? `I am instructing the Builder Agent to update tool "${decision.toolName}" based on your request: "${decision.details}"...\n\n`
+           : `I see you need a tool for "${decision.details}". I am instructing the Builder Agent to create it now.\n\n`;
         
+        sendEvent({ type: 'text', content: msg });
+        
+        // If Update, construct a richer context for the builder
+        let builderRequirement = decision.details || message;
+        if (isUpdate) {
+            const oldTool = toolRegistry.get(decision.toolName);
+            if (oldTool) {
+                builderRequirement = `Update the existing tool '${decision.toolName}'. \n\nOriginal Description: ${oldTool.description}\nOriginal Code: ${oldTool.implementation}\n\nModification Request: ${decision.details}`;
+            } else {
+                sendEvent({ type: 'text', content: `(Note: Tool '${decision.toolName}' was not found, so I will build it from scratch.)\n` });
+            }
+        }
+
         try {
           // Delegation: Wait for Builder to Finish, while streaming logs
-          const buildResult = await builder.buildAndVerify(decision.details || message, (log) => {
+          const buildResult = await builder.buildAndVerify(builderRequirement, (log) => {
              // Pass builder logs to frontend
              sendEvent(log);
           });
           
           sendEvent({ type: 'log', content: buildResult.logs });
-          sendEvent({ type: 'tool_built', tool: buildResult.tool }); // Signal to UI to update sidebar
+          sendEvent({ type: 'tool_update', tool: buildResult.tool }); // Signal to UI to update sidebar
           
           // Specific phrase requested by user
-          sendEvent({ type: 'text', content: `\n\n**Main Agent:** The tool building is finished, I can use the tool now.\n\n` });
+          sendEvent({ type: 'text', content: `\n\n**Main Agent:** The tool ${isUpdate ? 'update' : 'building'} is finished. I can use the tool now.\n\n` });
 
         } catch (buildError) {
            sendEvent({ type: 'error', content: `Builder failed: ${buildError.message}` });

@@ -49,14 +49,9 @@ const App: React.FC = () => {
             role: 'system', 
             content: chunk.content 
           }]);
-          // Move the bot message to the bottom so it stays relevant if needed, 
-          // but for now simple append is okay, though logs might appear *after* the text starts.
-          // To fix visual flow, we just append logs. The "text" chunks will continue updating the *existing* bot bubble above or below.
-          // Better UX: Append logs, and ensure the "Model" text bubble is always the last one if it's still generating.
-          // For simplicity in this structure: Just add logs as new messages.
         }
-        else if (chunk.type === 'tool_built') {
-          fetchTools(); // Refresh sidebar
+        else if (chunk.type === 'tool_update' || chunk.type === 'tool_built') {
+          fetchTools(); // Refresh sidebar on create, update, or delete
         }
         else if (chunk.type === 'error') {
           setMessages(prev => [...prev, { id: generateId(), role: 'system', content: `Error: ${chunk.content}` }]);

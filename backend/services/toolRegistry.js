@@ -65,6 +65,14 @@ class ToolRegistry {
     return Array.from(this.tools.values()).map(t => t.declaration);
   }
 
+  delete(name) {
+    const existed = this.tools.delete(name);
+    if (existed) {
+      console.log(`[Registry] Deleted tool: ${name}`);
+    }
+    return existed;
+  }
+
   async execute(name, args) {
     const tool = this.tools.get(name);
     if (!tool) throw new Error(`Tool ${name} not found`);
