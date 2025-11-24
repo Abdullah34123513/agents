@@ -15,29 +15,32 @@ app.use(express.json({ limit: '10mb' }));
 // Health Check
 app.get('/health', (req, res) => res.send('Nexus Backend Active'));
 
-// Get all available tools (for UI display)
+// Get all available tools
 app.get('/api/tools', (req, res) => {
   res.json(toolRegistry.getAll());
 });
 
-// Main Interaction Endpoint
+// Streaming Chat Endpoint
 app.post('/api/chat', async (req, res) => {
+  const { message, sessionId } = req.body;
+
+  // Set headers for streaming
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Transfer-Encoding', 'chunked');
+
+  // Callback to write data to stream
+  const sendEvent = (data) => {
+    // We send newline-delimited JSON
+    res.write(JSON.stringify(data) + "\n");
+  };
+
   try {
-    const { message, sessionId } = req.body;
-    
-    // The Orchestrator handles the complexity:
-    // 1. Decides intent (Chat vs Build)
-    // 2. Builds tool if needed (delegating to Builder)
-    // 3. Runs the conversation loop with Gemini (executing tools on backend)
-    const result = await orchestrator.processUserMessage(sessionId || 'default', message);
-    
-    res.json(result);
+    await orchestrator.processUserMessage(sessionId || 'default', message, sendEvent);
   } catch (error) {
     console.error('Server Error:', error);
-    res.status(500).json({ 
-      text: `System Error: ${error.message}`,
-      type: 'error'
-    });
+    sendEvent({ type: 'error', content: `System Error: ${error.message}` });
+  } finally {
+    res.end();
   }
 });
 

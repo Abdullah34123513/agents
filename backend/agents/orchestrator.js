@@ -23,7 +23,8 @@ Output JSON: { "action": "BUILD_TOOL" | "CHAT", "details": "precise description 
 const sessions = new Map();
 
 export const orchestrator = {
-  async processUserMessage(sessionId, message) {
+  // Now accepts a callback 'sendEvent' to stream chunks to the frontend
+  async processUserMessage(sessionId, message, sendEvent) {
     // 1. Initialize History
     let history = sessions.get(sessionId);
     if (!history) {
@@ -34,11 +35,10 @@ export const orchestrator = {
     }
 
     const toolNames = toolRegistry.getAll().map(t => t.name).join(', ');
-    let systemNarrative = "";
-    let toolBuilt = null;
 
     try {
       // 2. Decide Intent
+      // Inform user we are thinking
       const decisionReq = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: `User Message: ${message}`,
@@ -52,26 +52,26 @@ export const orchestrator = {
 
       // 3. Invoke Builder Agent if needed
       if (decision.action === 'BUILD_TOOL') {
-        systemNarrative += `**Main Agent:** I see you need a tool for "${decision.details}". Calling Builder Agent...\n\n`;
+        sendEvent({ type: 'text', content: `I see you need a tool for "${decision.details}". I am instructing the Builder Agent to create it now.\n\n` });
         
         try {
-          // Delegation: Wait for Builder to Finish
-          const buildResult = await builder.buildAndVerify(decision.details || message);
+          // Delegation: Wait for Builder to Finish, while streaming logs
+          const buildResult = await builder.buildAndVerify(decision.details || message, (log) => {
+             // Pass builder logs to frontend
+             sendEvent(log);
+          });
           
-          toolBuilt = buildResult.tool;
-          systemNarrative += `**${buildResult.logs}**\n\n`;
-          systemNarrative += `**Main Agent:** Thank you, Builder. I will now use the '${toolBuilt.name}' tool.\n\n`;
+          sendEvent({ type: 'log', content: buildResult.logs });
+          sendEvent({ type: 'tool_built', tool: buildResult.tool }); // Signal to UI to update sidebar
+          sendEvent({ type: 'text', content: `\n\n**Main Agent:** The tool building is finished. I can use the tool now.\n\n` });
 
         } catch (buildError) {
-          return { 
-            text: `**Main Agent:** I asked the Builder to create a tool, but they encountered a critical error: ${buildError.message}`,
-            type: 'error' 
-          };
+           sendEvent({ type: 'error', content: `Builder failed: ${buildError.message}` });
+           return;
         }
       }
 
       // 4. Chat Loop (Execution Phase)
-      // We create a fresh chat config with the LATEST tools (including the new one)
       const chat = ai.chats.create({
         model: 'gemini-2.5-flash',
         history: history,
@@ -85,8 +85,7 @@ export const orchestrator = {
       // Send user message to model
       let result = await chat.sendMessage({ message: message });
       
-      // Handle Function Calls (The Main Agent "using" the tool)
-      // We limit the loop to prevent infinite tool calling loops
+      // Handle Function Calls
       let functionCallAttempts = 0;
       const MAX_FUNCTION_CALLS = 5;
 
@@ -102,11 +101,10 @@ export const orchestrator = {
         for (const part of parts) {
           if (part.functionCall) {
             const { name, args } = part.functionCall;
-            console.log(`[Main Agent] Executing tool: ${name}`);
+            sendEvent({ type: 'log', content: `[Main Agent] Executing tool: ${name}...` });
             
             let executionResult;
             try {
-               // Execute safely via Registry
                executionResult = toolRegistry.execute(name, args);
                toolOutputs.push({
                  functionResponse: { name, response: { result: executionResult } }
@@ -131,18 +129,12 @@ export const orchestrator = {
       history.push({ role: 'model', parts: [{ text: finalText }] });
       sessions.set(sessionId, history);
 
-      return {
-        text: systemNarrative + finalText,
-        toolBuilt: toolBuilt,
-        type: 'text'
-      };
+      sendEvent({ type: 'text', content: finalText });
+      sendEvent({ type: 'done' });
 
     } catch (e) {
       console.error("Orchestrator Critical Error:", e);
-      return { 
-        text: `**Main Agent:** I lost connection with my thought process. (Error: ${e.message}). Please try asking again.`, 
-        type: 'error' 
-      };
+      sendEvent({ type: 'error', content: `System Error: ${e.message}` });
     }
   }
 };

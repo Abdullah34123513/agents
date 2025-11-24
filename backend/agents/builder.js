@@ -48,18 +48,20 @@ The complete, corrected JSON object (same structure as Builder).
 export const builder = {
   /**
    * Orchestrates the Build -> Test -> Fix loop.
+   * Now supports streaming logs via callback.
    */
-  async buildAndVerify(requirement) {
+  async buildAndVerify(requirement, logCallback = () => {}) {
     let attempts = 0;
     const maxAttempts = 3;
     let lastError = null;
     let currentSpec = null;
 
-    console.log(`[Builder] Received request: ${requirement}`);
+    logCallback({ type: 'log', content: `[Builder] Analyzing requirement: "${requirement}"...` });
 
     // 1. Initial Design
     try {
       currentSpec = await this.generateSpec(requirement);
+      logCallback({ type: 'log', content: `[Builder] Generated initial design for '${currentSpec.toolName}'` });
     } catch (e) {
       throw new Error(`Failed to generate initial design: ${e.message}`);
     }
@@ -67,7 +69,7 @@ export const builder = {
     // 2. Verify Loop
     while (attempts < maxAttempts) {
       attempts++;
-      console.log(`[Builder] Verification Attempt ${attempts}/${maxAttempts} for ${currentSpec.toolName}`);
+      logCallback({ type: 'log', content: `[Builder] Cycle ${attempts}/${maxAttempts}: Running tests...` });
 
       // Register temporarily to test execution
       toolRegistry.register(currentSpec);
@@ -75,16 +77,16 @@ export const builder = {
       const testResult = this.runTests(currentSpec);
 
       if (testResult.success) {
-        console.log(`[Builder] ✅ Tests passed for ${currentSpec.toolName}`);
+        logCallback({ type: 'log', content: `[Builder] ✅ All tests passed.` });
         return {
           tool: toolRegistry.get(currentSpec.toolName),
-          logs: `Builder Agent: I have built and tested '${currentSpec.toolName}'. It passed ${currentSpec.testCases.length} automated tests. Handing over to Main Agent.`
+          logs: `Builder Agent: I have built and tested '${currentSpec.toolName}'. It passed ${currentSpec.testCases?.length || 0} automated tests. Handing over to Main Agent.`
         };
       }
 
       // Test Failed
       lastError = testResult.error;
-      console.warn(`[Builder] ❌ Test failed: ${lastError}`);
+      logCallback({ type: 'log', content: `[Builder] ❌ Test failed: ${lastError}. Fixing code...` });
 
       // 3. Self-Correction
       try {
@@ -131,15 +133,12 @@ export const builder = {
 
   runTests(spec) {
     if (!spec.testCases || spec.testCases.length === 0) {
-      return { success: true }; // No tests generated, assume strict syntax check passed in registry
+      return { success: true }; // No tests generated
     }
 
     for (const test of spec.testCases) {
       try {
-        console.log(`[Builder] Running test:`, test.args);
         const result = toolRegistry.execute(spec.toolName, test.args);
-        
-        // Basic validation: Output shouldn't be undefined if it's not supposed to be
         if (result === undefined) {
           throw new Error("Function returned undefined");
         }

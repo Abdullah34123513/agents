@@ -24,23 +24,45 @@ const App: React.FC = () => {
   useEffect(() => { fetchTools(); }, []);
 
   const handleSend = async (text: string) => {
+    // 1. Add User Message
     const userMsg: Message = { id: generateId(), role: 'user', content: text };
     setMessages(prev => [...prev, userMsg]);
+    
+    // 2. Prepare Placeholder for Bot Response
+    const botMsgId = generateId();
+    setMessages(prev => [...prev, { id: botMsgId, role: 'model', content: '' }]);
     setIsLoading(true);
 
     try {
-      const response = await api.sendMessage(text);
-      
-      const botMsg: Message = {
-        id: generateId(),
-        role: 'model',
-        content: response.text
-      };
-      setMessages(prev => [...prev, botMsg]);
-      
-      if (response.toolBuilt) {
-        await fetchTools(); // Refresh sidebar if tool was built
-      }
+      // 3. Stream Response
+      await api.streamChat(text, (chunk) => {
+        if (chunk.type === 'text') {
+          // Append text to the specific bot message
+          setMessages(prev => prev.map(m => 
+            m.id === botMsgId ? { ...m, content: m.content + chunk.content } : m
+          ));
+        } 
+        else if (chunk.type === 'log') {
+          // Add system/log message
+          setMessages(prev => [...prev, { 
+            id: generateId(), 
+            role: 'system', 
+            content: chunk.content 
+          }]);
+          // Move the bot message to the bottom so it stays relevant if needed, 
+          // but for now simple append is okay, though logs might appear *after* the text starts.
+          // To fix visual flow, we just append logs. The "text" chunks will continue updating the *existing* bot bubble above or below.
+          // Better UX: Append logs, and ensure the "Model" text bubble is always the last one if it's still generating.
+          // For simplicity in this structure: Just add logs as new messages.
+        }
+        else if (chunk.type === 'tool_built') {
+          fetchTools(); // Refresh sidebar
+        }
+        else if (chunk.type === 'error') {
+          setMessages(prev => [...prev, { id: generateId(), role: 'system', content: `Error: ${chunk.content}` }]);
+        }
+      });
+
     } catch (e) {
       setMessages(prev => [...prev, { id: generateId(), role: 'system', content: 'Connection Error' }]);
     } finally {
