@@ -4,6 +4,7 @@ import { Type } from '@google/genai';
 class ToolRegistry {
   constructor() {
     this.tools = new Map();
+    this.store = new Map(); // Simple in-memory persistence
   }
 
   register(toolSpec) {
@@ -79,7 +80,15 @@ class ToolRegistry {
         setTimeout: global.setTimeout,
         clearTimeout: global.clearTimeout,
         setInterval: global.setInterval,
-        clearInterval: global.clearInterval
+        clearInterval: global.clearInterval,
+        // Expose a simple DB for persistence across tool calls
+        db: {
+          get: (k) => this.store.get(k),
+          set: (k, v) => this.store.set(k, v),
+          delete: (k) => this.store.delete(k),
+          list: () => Array.from(this.store.keys()),
+          clear: () => this.store.clear()
+        }
       });
 
       // Wrap code in an async IIFE
