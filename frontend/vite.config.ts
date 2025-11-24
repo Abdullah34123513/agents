@@ -4,18 +4,20 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
-  root: 'frontend', // Set root to frontend folder
-  publicDir: 'public',
-  build: {
-    outDir: '../dist',
-    emptyOutDir: true
-  },
+  // root defaults to process.cwd(), which is correct when running from /frontend
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
   },
   server: {
-    port: 5173
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        secure: false
+      }
+    }
   }
 });
