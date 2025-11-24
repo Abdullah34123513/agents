@@ -13,7 +13,10 @@ Decide the next action based on the user's message and available tools.
 
 Available Tools: {{TOOLS}}
 
-1. "BUILD_TOOL": Use this ONLY if the user asks for a calculation, data processing, or logic task that CANNOT be done with text or existing tools.
+1. "BUILD_TOOL": Use this if the user asks for:
+    - A calculation, data processing, or logic task.
+    - Access to **real-time data or external information** (news, weather, stock prices, web search) that you cannot answer with your internal knowledge.
+    - A specific capability not in the "Available Tools" list.
 2. "CHAT": Use this for general conversation, OR if you can use an EXISTING tool from the list above.
 
 Output JSON: { "action": "BUILD_TOOL" | "CHAT", "details": "precise description of tool to build" }
@@ -29,8 +32,8 @@ export const orchestrator = {
     let history = sessions.get(sessionId);
     if (!history) {
       history = [
-        { role: 'user', parts: [{ text: "System: You are Nexus. You work with a Builder Agent." }] },
-        { role: 'model', parts: [{ text: "Understood. I am the Main Agent. I will coordinate with the Builder." }] }
+        { role: 'user', parts: [{ text: "System: You are Nexus. You work with a Builder Agent. If you lack a capability (like fetching news), you should build a tool for it." }] },
+        { role: 'model', parts: [{ text: "Understood. I am the Main Agent. I will coordinate with the Builder to expand my capabilities." }] }
       ];
     }
 
@@ -38,10 +41,19 @@ export const orchestrator = {
 
     try {
       // 2. Decide Intent
-      // Inform user we are thinking
+      // Include recent history for context (handle "Yes/No" flows)
+      const recentHistory = history.slice(-4).map(h => `${h.role.toUpperCase()}: ${h.parts[0].text}`).join('\n');
+
+      const decisionContext = `
+      Conversation History:
+      ${recentHistory}
+
+      User Message: ${message}
+      `;
+
       const decisionReq = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `User Message: ${message}`,
+        contents: decisionContext,
         config: {
           systemInstruction: DECISION_PROMPT.replace('{{TOOLS}}', toolNames),
           responseMimeType: "application/json"
