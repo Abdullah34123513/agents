@@ -75,7 +75,7 @@ export const orchestrator = {
       if (decision.action === 'DELETE_TOOL') {
          const name = decision.toolName;
          if (toolRegistry.delete(name)) {
-             sendEvent({ type: 'text', content: `I have deleted the tool "${name}" from the registry.` });
+             sendEvent({ type: 'text', content: `I have deleted the tool "${name}".` });
              sendEvent({ type: 'tool_update' }); // Triggers refresh on frontend
          } else {
              sendEvent({ type: 'text', content: `I couldn't find a tool named "${name}" to delete.` });
@@ -88,8 +88,8 @@ export const orchestrator = {
       if (decision.action === 'BUILD_TOOL' || decision.action === 'UPDATE_TOOL') {
         const isUpdate = decision.action === 'UPDATE_TOOL';
         const msg = isUpdate 
-           ? `I am instructing the Builder Agent to update tool "${decision.toolName}" based on your request: "${decision.details}"...\n\n`
-           : `I see you need a tool for "${decision.details}". I am instructing the Builder Agent to create it now.\n\n`;
+           ? `I'll update the tool "${decision.toolName}" for you. One moment...`
+           : `I need to build a new tool for that. Give me a second...`;
         
         sendEvent({ type: 'text', content: msg });
         
@@ -100,8 +100,6 @@ export const orchestrator = {
             if (oldTool) {
                 builderRequirement = `Update the existing tool '${decision.toolName}'. \n\nOriginal Description: ${oldTool.description}\nOriginal Code: ${oldTool.implementation}\n\nModification Request: ${decision.details}`;
             } else {
-                // If specific tool not found, look for most likely candidate if key provided
-                // This is a basic fallback
                 builderRequirement = `Update tool '${decision.toolName}'. Request: ${decision.details}`;
             }
         }
@@ -109,17 +107,16 @@ export const orchestrator = {
         try {
           // Delegation: Wait for Builder to Finish, while streaming logs
           const buildResult = await builder.buildAndVerify(builderRequirement, (log) => {
-             // Pass builder logs to frontend
+             // Pass builder logs to frontend (will be hidden in status bar)
              sendEvent(log);
           });
           
-          sendEvent({ type: 'log', content: buildResult.logs });
-          sendEvent({ type: 'tool_update', tool: buildResult.tool }); // Signal to UI to update sidebar
+          sendEvent({ type: 'tool_update', tool: buildResult.tool }); 
           
           // Handle Missing Key Scenario
           if (buildResult.status === 'missing_key') {
-             sendEvent({ type: 'text', content: `\n\n**Main Agent:** The tool '${buildResult.tool.name}' has been created, but it appears to require an API Key to function correctly.\n\nPlease provide the API Key (or URL/credentials) so I can update the tool with access.` });
-             // Update history so context is aware
+             sendEvent({ type: 'text', content: `\n\nI've created '${buildResult.tool.name}', but it requires an API Key to work. Please provide the key (or credentials) so I can enable it.` });
+             // Update history
              history.push({ role: 'user', parts: [{ text: message }] });
              history.push({ role: 'model', parts: [{ text: `I built '${buildResult.tool.name}' but it needs an API Key.` }] });
              sessions.set(sessionId, history);
@@ -127,11 +124,11 @@ export const orchestrator = {
              return;
           }
 
-          // Specific phrase requested by user (Success case)
-          sendEvent({ type: 'text', content: `\n\n**Main Agent:** The tool ${isUpdate ? 'update' : 'building'} is finished. I can use the tool now.\n\n` });
+          // Tool ready, proceed to use it seamlessly
+          // sendEvent({ type: 'text', content: `\n\nTool ready. ` });
 
         } catch (buildError) {
-           sendEvent({ type: 'error', content: `Builder failed: ${buildError.message}` });
+           sendEvent({ type: 'error', content: `Something went wrong while building the tool: ${buildError.message}` });
            return;
         }
       }
@@ -166,11 +163,11 @@ export const orchestrator = {
         for (const part of parts) {
           if (part.functionCall) {
             const { name, args } = part.functionCall;
+            // This log now goes to status bar
             sendEvent({ type: 'log', content: `[Main Agent] Executing tool: ${name}...` });
             
             let executionResult;
             try {
-               // AWAIT the async tool execution
                executionResult = await toolRegistry.execute(name, args);
                toolOutputs.push({
                  functionResponse: { name, response: { result: executionResult } }
@@ -184,7 +181,6 @@ export const orchestrator = {
           }
         }
         
-        // Send tool outputs back to Gemini
         result = await chat.sendMessage({ message: toolOutputs });
       }
 

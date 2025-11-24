@@ -13,6 +13,7 @@ const App: React.FC = () => {
   ]);
   const [tools, setTools] = useState<DynamicTool[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [activity, setActivity] = useState<string>(''); // Holds current background task status
 
   const fetchTools = async () => {
     try {
@@ -32,6 +33,7 @@ const App: React.FC = () => {
     const botMsgId = generateId();
     setMessages(prev => [...prev, { id: botMsgId, role: 'model', content: '' }]);
     setIsLoading(true);
+    setActivity('Thinking...');
 
     try {
       // 3. Stream Response
@@ -43,18 +45,16 @@ const App: React.FC = () => {
           ));
         } 
         else if (chunk.type === 'log') {
-          // Add system/log message
-          setMessages(prev => [...prev, { 
-            id: generateId(), 
-            role: 'system', 
-            content: chunk.content 
-          }]);
+          // Update Activity Bar instead of Chat History
+          setActivity(chunk.content.replace('[Builder]', '').trim());
         }
         else if (chunk.type === 'tool_update' || chunk.type === 'tool_built') {
-          fetchTools(); // Refresh sidebar on create, update, or delete
+          fetchTools();
+          setActivity('Tool registry updated.');
         }
         else if (chunk.type === 'error') {
-          setMessages(prev => [...prev, { id: generateId(), role: 'system', content: `Error: ${chunk.content}` }]);
+          // Errors still go to chat for visibility, but styled differently
+           setMessages(prev => [...prev, { id: generateId(), role: 'system', content: `Error: ${chunk.content}` }]);
         }
       });
 
@@ -62,6 +62,7 @@ const App: React.FC = () => {
       setMessages(prev => [...prev, { id: generateId(), role: 'system', content: 'Connection Error' }]);
     } finally {
       setIsLoading(false);
+      setActivity('');
     }
   };
 
@@ -80,7 +81,7 @@ const App: React.FC = () => {
             messages={messages} 
             isLoading={isLoading} 
             onSendMessage={handleSend}
-            status={isLoading ? 'processing' : 'idle'}
+            status={activity || (isLoading ? 'processing' : 'idle')}
           />
         </div>
       </div>

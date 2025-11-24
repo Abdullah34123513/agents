@@ -1,7 +1,6 @@
-
 import React, { useEffect, useRef } from 'react';
 import { Message } from '../types';
-import { Terminal, Cpu, User, Wrench } from 'lucide-react';
+import { Terminal, Cpu, User, Wrench, Loader2 } from 'lucide-react';
 
 interface ChatInterfaceProps {
   messages: Message[];
@@ -29,6 +28,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, isLoading, onSe
     setInput('');
   };
 
+  // Filter out system messages to keep the conversation clean
+  const visibleMessages = messages.filter(m => m.role !== 'system');
+
   return (
     <div className="flex flex-col h-full bg-slate-900 rounded-2xl border border-slate-800 shadow-2xl overflow-hidden relative">
       {/* Header */}
@@ -41,7 +43,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, isLoading, onSe
             <h2 className="font-semibold text-slate-200">Nexus Core</h2>
             <div className="flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${isLoading ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`}></span>
-              <span className="text-xs text-slate-500 font-mono uppercase">{status}</span>
+              <span className="text-xs text-slate-500 font-mono uppercase">ONLINE</span>
             </div>
           </div>
         </div>
@@ -49,14 +51,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, isLoading, onSe
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar bg-gradient-to-b from-slate-900 to-slate-950">
-        {messages.length === 0 && (
+        {visibleMessages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-4">
             <Cpu className="w-16 h-16 opacity-20" />
             <p className="text-sm font-medium">Ready to build and execute tools.</p>
           </div>
         )}
         
-        {messages.map((msg) => (
+        {visibleMessages.map((msg) => (
           <div key={msg.id} className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
             {/* Avatar */}
             <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1 
@@ -66,31 +68,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, isLoading, onSe
 
             {/* Bubble */}
             <div className={`flex flex-col max-w-[80%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-              {msg.metadata?.toolName ? (
-                <div className="bg-slate-800 border border-indigo-500/30 rounded-lg overflow-hidden w-full min-w-[300px]">
-                   <div className="bg-slate-950 px-3 py-2 border-b border-slate-800 flex items-center gap-2 text-xs font-mono text-indigo-400">
-                      <Wrench size={12} />
-                      BUILDING TOOL: {msg.metadata.toolName}
-                   </div>
-                   {msg.metadata.code && (
-                     <pre className="p-3 text-xs font-mono text-slate-300 overflow-x-auto bg-[#0d1117]">
-                       <code>{msg.metadata.code}</code>
-                     </pre>
-                   )}
-                </div>
-              ) : (
-                <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm
-                  ${msg.role === 'user' 
-                    ? 'bg-indigo-600 text-white rounded-tr-sm' 
-                    : 'bg-slate-800 text-slate-200 rounded-tl-sm border border-slate-700'}`}>
-                  {msg.content}
-                </div>
-              )}
+              <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm
+                ${msg.role === 'user' 
+                  ? 'bg-indigo-600 text-white rounded-tr-sm' 
+                  : 'bg-slate-800 text-slate-200 rounded-tl-sm border border-slate-700'}`}>
+                {msg.content}
+              </div>
             </div>
           </div>
         ))}
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Status Bar for Technical Logs (Hidden when idle) */}
+      {status !== 'idle' && status !== '' && (
+        <div className="bg-slate-900/90 border-t border-slate-800 px-4 py-2 flex items-center gap-2 text-xs font-mono text-slate-400 animate-in slide-in-from-bottom-2">
+          <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
+          <span className="truncate">{status}</span>
+        </div>
+      )}
 
       {/* Input Area */}
       <div className="p-4 bg-slate-950 border-t border-slate-800">
@@ -99,7 +95,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, isLoading, onSe
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Describe a task or a tool you need..."
+            placeholder="Type your request..."
             className="w-full bg-slate-900 text-slate-200 placeholder-slate-500 border border-slate-700 rounded-xl py-3 px-4 pr-12 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all"
             disabled={isLoading}
           />
