@@ -20,8 +20,6 @@ AVAILABLE GLOBALS:
     - db.delete(key): boolean
     - db.list(): string[] (returns keys)
 
-Use 'db' if the user asks to store, remember, or save information (like a name, a todo list, or preferences) locally without specifying an external database.
-
 Input: Tool Requirement.
 
 Output JSON:
@@ -39,7 +37,13 @@ Output JSON:
   "testCases": [
     { 
       "args": { "n": 5 }, 
-      "expectedOutcome": "Should return data" 
+      "expectedReturn": 120, 
+      "description": "Should calculate factorial of 5"
+    },
+    {
+      "args": { "query": "latest" },
+      "expectedType": "array", 
+      "description": "Should return a list of items for non-deterministic tools"
     }
   ]
 }
@@ -47,11 +51,11 @@ Output JSON:
 
 const FIXER_PROMPT = `
 You are the "Builder Agent" fixing your own code.
-The tool failed during testing.
+The tool failed the "Perfect Check" (assertion testing).
 
 Input:
 1. Original Spec
-2. Error Message from Test Execution
+2. Error Message from Test Execution (Expected vs Actual)
 
 Output:
 The complete, corrected JSON object (same structure as Builder).
@@ -83,7 +87,7 @@ export const builder = {
     // 2. Verify Loop
     while (attempts < maxAttempts) {
       attempts++;
-      logCallback({ type: 'log', content: `[Builder] Cycle ${attempts}/${maxAttempts}: Running tests...` });
+      logCallback({ type: 'log', content: `[Builder] Cycle ${attempts}/${maxAttempts}: Running strict verification...` });
 
       try {
         // Register temporarily to test execution
@@ -91,16 +95,27 @@ export const builder = {
         const testResult = await this.runTests(currentSpec);
 
         if (testResult.success) {
-          logCallback({ type: 'log', content: `[Builder] ✅ All tests passed.` });
+          logCallback({ type: 'log', content: `[Builder] ✅ All tests passed perfectly.` });
           return {
             tool: toolRegistry.get(currentSpec.toolName),
-            logs: `Builder Agent: The tool building is finished. I have built and verified '${currentSpec.toolName}'.`
+            logs: `Builder Agent: The tool building is finished. I have built and verified '${currentSpec.toolName}'.`,
+            status: 'success'
           };
         }
 
-        // Test Failed
+        // Check for specific Auth Errors (Missing API Key)
+        if (testResult.isAuthError) {
+           logCallback({ type: 'log', content: `[Builder] ⚠️ Authentication/API Key missing detected.` });
+           return {
+             tool: toolRegistry.get(currentSpec.toolName),
+             logs: `Builder Agent: The tool '${currentSpec.toolName}' was built but failed authentication tests. It likely requires an API Key.`,
+             status: 'missing_key'
+           };
+        }
+
+        // Generic Test Failed
         lastError = testResult.error;
-        logCallback({ type: 'log', content: `[Builder] ❌ Test failed: ${lastError}. Fixing code...` });
+        logCallback({ type: 'log', content: `[Builder] ❌ Check Failed: ${lastError}. Fixing code...` });
 
         // 3. Self-Correction
         const originalName = currentSpec.toolName;
@@ -119,7 +134,7 @@ export const builder = {
         if (attempts >= maxAttempts) {
              throw new Error(`Builder Agent failed after ${maxAttempts} attempts. Last error: ${msg}`);
         }
-        // If it was a registration error (invalid name), try to fix it in next loop or just fail if crucial
+        // If it was a registration error (invalid name), try to fix it in next loop
         lastError = msg;
       }
     }
@@ -142,7 +157,7 @@ export const builder = {
 
   async fixSpec(brokenSpec, errorMsg) {
     const context = `
-      The tool execution failed.
+      The tool execution failed validation.
       Current Implementation: ${brokenSpec.implementationBody}
       Test Input Causing Error: ${JSON.stringify(brokenSpec.testCases)}
       Error Output: ${errorMsg}
@@ -164,15 +179,47 @@ export const builder = {
       return { success: true }; // No tests generated
     }
 
-    for (const test of spec.testCases) {
+    for (const [i, test] of spec.testCases.entries()) {
       try {
         // await the execution since tools are now async
         const result = await toolRegistry.execute(spec.toolName, test.args);
+        
         if (result === undefined) {
-          throw new Error("Function returned undefined");
+           throw new Error("Function returned undefined");
         }
+
+        // Assertion 1: Strict Equality (for deterministic tools like Math)
+        if (test.expectedReturn !== undefined) {
+           const actualStr = JSON.stringify(result);
+           const expectedStr = JSON.stringify(test.expectedReturn);
+           if (actualStr !== expectedStr) {
+             throw new Error(`Assertion Failed. Expected ${expectedStr}, got ${actualStr}`);
+           }
+        }
+
+        // Assertion 2: Type Check (for non-deterministic tools like News/Random)
+        if (test.expectedType) {
+           const type = Array.isArray(result) ? 'array' : typeof result;
+           if (type !== test.expectedType) {
+              throw new Error(`Type Mismatch. Expected ${test.expectedType}, got ${type}`);
+           }
+        }
+
       } catch (e) {
-        return { success: false, error: e.message };
+        // Detect Auth Errors
+        const msg = e.message.toLowerCase();
+        if (
+            msg.includes('401') || 
+            msg.includes('403') || 
+            msg.includes('unauthorized') || 
+            msg.includes('forbidden') || 
+            msg.includes('api key') ||
+            msg.includes('apikey')
+        ) {
+            return { success: false, error: e.message, isAuthError: true };
+        }
+
+        return { success: false, error: `Test Case #${i + 1} (${test.description || 'Unknown'}): ${e.message}` };
       }
     }
 

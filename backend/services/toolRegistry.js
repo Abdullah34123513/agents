@@ -113,7 +113,7 @@ class ToolRegistry {
       return result;
     } catch (error) {
       console.error(`[Registry] Execution failed for ${name}:`, error);
-      throw new Error(`Tool execution error: ${error.message}`);
+      throw new Error(error.message); // Clean message for builder
     }
   }
 

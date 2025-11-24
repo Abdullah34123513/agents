@@ -17,7 +17,9 @@ Available Tools: {{TOOLS}}
     - A calculation, data processing, or logic task.
     - Access to **real-time data or external information** (news, weather, stock prices, web search) that you cannot answer with your internal knowledge.
     - A specific capability not in the "Available Tools" list.
-2. "UPDATE_TOOL": Use this if the user specifically asks to modify, improve, fix, or change the behavior of an EXISTING tool.
+2. "UPDATE_TOOL": Use this if:
+    - The user specifically asks to modify, improve, fix, or change the behavior of an EXISTING tool.
+    - The user PROVIDES an API Key, token, or credentials (e.g., "here is my key", "sk-...", "use this api key"). In this case, 'details' should be "Inject this API key: [KEY] into the tool [TOOL_NAME]".
 3. "DELETE_TOOL": Use this if the user specifically asks to delete or remove an EXISTING tool.
 4. "CHAT": Use this for general conversation, OR if you can use an EXISTING tool from the list above without modification.
 
@@ -98,7 +100,9 @@ export const orchestrator = {
             if (oldTool) {
                 builderRequirement = `Update the existing tool '${decision.toolName}'. \n\nOriginal Description: ${oldTool.description}\nOriginal Code: ${oldTool.implementation}\n\nModification Request: ${decision.details}`;
             } else {
-                sendEvent({ type: 'text', content: `(Note: Tool '${decision.toolName}' was not found, so I will build it from scratch.)\n` });
+                // If specific tool not found, look for most likely candidate if key provided
+                // This is a basic fallback
+                builderRequirement = `Update tool '${decision.toolName}'. Request: ${decision.details}`;
             }
         }
 
@@ -112,7 +116,18 @@ export const orchestrator = {
           sendEvent({ type: 'log', content: buildResult.logs });
           sendEvent({ type: 'tool_update', tool: buildResult.tool }); // Signal to UI to update sidebar
           
-          // Specific phrase requested by user
+          // Handle Missing Key Scenario
+          if (buildResult.status === 'missing_key') {
+             sendEvent({ type: 'text', content: `\n\n**Main Agent:** The tool '${buildResult.tool.name}' has been created, but it appears to require an API Key to function correctly.\n\nPlease provide the API Key (or URL/credentials) so I can update the tool with access.` });
+             // Update history so context is aware
+             history.push({ role: 'user', parts: [{ text: message }] });
+             history.push({ role: 'model', parts: [{ text: `I built '${buildResult.tool.name}' but it needs an API Key.` }] });
+             sessions.set(sessionId, history);
+             sendEvent({ type: 'done' });
+             return;
+          }
+
+          // Specific phrase requested by user (Success case)
           sendEvent({ type: 'text', content: `\n\n**Main Agent:** The tool ${isUpdate ? 'update' : 'building'} is finished. I can use the tool now.\n\n` });
 
         } catch (buildError) {
