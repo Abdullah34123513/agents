@@ -63,7 +63,9 @@ export const orchestrator = {
           
           sendEvent({ type: 'log', content: buildResult.logs });
           sendEvent({ type: 'tool_built', tool: buildResult.tool }); // Signal to UI to update sidebar
-          sendEvent({ type: 'text', content: `\n\n**Main Agent:** The tool building is finished. I can use the tool now.\n\n` });
+          
+          // Specific phrase requested by user
+          sendEvent({ type: 'text', content: `\n\n**Main Agent:** The tool building is finished, I can use the tool now.\n\n` });
 
         } catch (buildError) {
            sendEvent({ type: 'error', content: `Builder failed: ${buildError.message}` });
@@ -105,7 +107,8 @@ export const orchestrator = {
             
             let executionResult;
             try {
-               executionResult = toolRegistry.execute(name, args);
+               // AWAIT the async tool execution
+               executionResult = await toolRegistry.execute(name, args);
                toolOutputs.push({
                  functionResponse: { name, response: { result: executionResult } }
                });

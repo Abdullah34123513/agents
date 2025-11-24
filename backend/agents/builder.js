@@ -8,7 +8,8 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const BUILDER_PROMPT = `
 You are the "Builder Agent". You are a senior JavaScript engineer.
-Your goal is to build a robust, synchronous tool and TEST cases for it.
+Your goal is to build a robust, ASYNCHRONOUS JavaScript tool and TEST cases for it.
+The environment supports 'fetch' for network requests.
 
 Input: Tool Requirement.
 
@@ -23,11 +24,11 @@ Output JSON:
     },
     "required": ["param1"]
   },
-  "implementationBody": "return args.n * 2;",
+  "implementationBody": "// You can use await fetch(). Return the result.\\nconst res = await fetch('...');\\nreturn await res.json();",
   "testCases": [
     { 
       "args": { "n": 5 }, 
-      "expectedOutcome": "Should return 10" 
+      "expectedOutcome": "Should return data" 
     }
   ]
 }
@@ -74,13 +75,13 @@ export const builder = {
       // Register temporarily to test execution
       toolRegistry.register(currentSpec);
 
-      const testResult = this.runTests(currentSpec);
+      const testResult = await this.runTests(currentSpec);
 
       if (testResult.success) {
         logCallback({ type: 'log', content: `[Builder] ✅ All tests passed.` });
         return {
           tool: toolRegistry.get(currentSpec.toolName),
-          logs: `Builder Agent: I have built and tested '${currentSpec.toolName}'. It passed ${currentSpec.testCases?.length || 0} automated tests. Handing over to Main Agent.`
+          logs: `Builder Agent: The tool building is finished. I have built and verified '${currentSpec.toolName}'.`
         };
       }
 
@@ -131,14 +132,15 @@ export const builder = {
     return JSON.parse(response.text);
   },
 
-  runTests(spec) {
+  async runTests(spec) {
     if (!spec.testCases || spec.testCases.length === 0) {
       return { success: true }; // No tests generated
     }
 
     for (const test of spec.testCases) {
       try {
-        const result = toolRegistry.execute(spec.toolName, test.args);
+        // await the execution since tools are now async
+        const result = await toolRegistry.execute(spec.toolName, test.args);
         if (result === undefined) {
           throw new Error("Function returned undefined");
         }

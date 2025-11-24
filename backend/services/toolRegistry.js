@@ -52,15 +52,20 @@ class ToolRegistry {
     return Array.from(this.tools.values()).map(t => t.declaration);
   }
 
-  execute(name, args) {
+  async execute(name, args) {
     const tool = this.tools.get(name);
     if (!tool) throw new Error(`Tool ${name} not found`);
 
     try {
-      // Execute in a fresh context (Sandbox)
-      const context = vm.createContext({ console, args });
-      // Wrap code in an IIFE that returns the result
-      const code = `(function() { 
+      // Execute in a fresh context (Sandbox) with FETCH access
+      const context = vm.createContext({ 
+        console, 
+        args, 
+        fetch: global.fetch // Enable network access
+      });
+
+      // Wrap code in an async IIFE
+      const code = `(async function() { 
         try {
           ${tool.implementation}
         } catch(e) {
@@ -68,7 +73,8 @@ class ToolRegistry {
         }
       })()`;
       
-      const result = vm.runInContext(code, context);
+      // Run and await the promise
+      const result = await vm.runInContext(code, context);
       return result;
     } catch (error) {
       console.error(`[Registry] Execution failed for ${name}:`, error);
