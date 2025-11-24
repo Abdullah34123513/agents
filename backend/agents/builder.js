@@ -74,12 +74,12 @@ export const builder = {
     let lastError = null;
     let currentSpec = null;
 
-    logCallback({ type: 'log', content: `[Builder] Analyzing requirement: "${requirement}"...` });
+    logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `I'm analyzing the requirement: "${requirement}"...` });
 
     // 1. Initial Design
     try {
       currentSpec = await this.generateSpec(requirement);
-      logCallback({ type: 'log', content: `[Builder] Generated initial design for '${currentSpec.toolName}'` });
+      logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `I've drafted a design for '${currentSpec.toolName}'. Starting implementation...` });
     } catch (e) {
       throw new Error(`Failed to generate initial design: ${e.message}`);
     }
@@ -87,7 +87,8 @@ export const builder = {
     // 2. Verify Loop
     while (attempts < maxAttempts) {
       attempts++;
-      logCallback({ type: 'log', content: `[Builder] Cycle ${attempts}/${maxAttempts}: Running strict verification...` });
+      logCallback({ type: 'log', content: `Running tests (Cycle ${attempts})...` });
+      logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `Running strict verification cycle ${attempts}/${maxAttempts}...` });
 
       try {
         // Register temporarily to test execution
@@ -95,27 +96,24 @@ export const builder = {
         const testResult = await this.runTests(currentSpec);
 
         if (testResult.success) {
-          logCallback({ type: 'log', content: `[Builder] ✅ All tests passed perfectly.` });
+          logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `✅ All tests passed. The tool '${currentSpec.toolName}' is verified and ready.` });
           return {
             tool: toolRegistry.get(currentSpec.toolName),
-            logs: `Builder Agent: The tool building is finished. I have built and verified '${currentSpec.toolName}'.`,
             status: 'success'
           };
         }
 
         // Check for specific Auth Errors (Missing API Key)
         if (testResult.isAuthError) {
-           logCallback({ type: 'log', content: `[Builder] ⚠️ Authentication/API Key missing detected.` });
            return {
              tool: toolRegistry.get(currentSpec.toolName),
-             logs: `Builder Agent: The tool '${currentSpec.toolName}' was built but failed authentication tests. It likely requires an API Key.`,
              status: 'missing_key'
            };
         }
 
         // Generic Test Failed
         lastError = testResult.error;
-        logCallback({ type: 'log', content: `[Builder] ❌ Check Failed: ${lastError}. Fixing code...` });
+        logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `❌ Test failed: ${lastError}. I need to fix the code.` });
 
         // 3. Self-Correction
         const originalName = currentSpec.toolName;

@@ -88,8 +88,8 @@ export const orchestrator = {
       if (decision.action === 'BUILD_TOOL' || decision.action === 'UPDATE_TOOL') {
         const isUpdate = decision.action === 'UPDATE_TOOL';
         const msg = isUpdate 
-           ? `I'll update the tool "${decision.toolName}" for you. One moment...`
-           : `I need to build a new tool for that. Give me a second...`;
+           ? `I'll coordinate with the Builder to update "${decision.toolName}".`
+           : `I'll ask the Builder Agent to create a tool for that.`;
         
         sendEvent({ type: 'text', content: msg });
         
@@ -104,10 +104,18 @@ export const orchestrator = {
             }
         }
 
+        // Notify Builder (Visible in Network Tab)
+        sendEvent({ 
+          type: 'inter_agent', 
+          from: 'Main Agent', 
+          to: 'Builder', 
+          content: `Requesting ${isUpdate ? 'update' : 'new tool'}: ${builderRequirement}` 
+        });
+
         try {
           // Delegation: Wait for Builder to Finish, while streaming logs
           const buildResult = await builder.buildAndVerify(builderRequirement, (log) => {
-             // Pass builder logs to frontend (will be hidden in status bar)
+             // Pass builder logs to frontend
              sendEvent(log);
           });
           
@@ -115,7 +123,14 @@ export const orchestrator = {
           
           // Handle Missing Key Scenario
           if (buildResult.status === 'missing_key') {
-             sendEvent({ type: 'text', content: `\n\nI've created '${buildResult.tool.name}', but it requires an API Key to work. Please provide the key (or credentials) so I can enable it.` });
+             sendEvent({ 
+                type: 'inter_agent', 
+                from: 'Builder', 
+                to: 'Main Agent', 
+                content: `I built '${buildResult.tool.name}', but authentication failed. It needs an API Key.` 
+             });
+             sendEvent({ type: 'text', content: `\n\nIt seems '${buildResult.tool.name}' requires an API Key. Please provide it so I can finish the setup.` });
+             
              // Update history
              history.push({ role: 'user', parts: [{ text: message }] });
              history.push({ role: 'model', parts: [{ text: `I built '${buildResult.tool.name}' but it needs an API Key.` }] });
@@ -124,8 +139,13 @@ export const orchestrator = {
              return;
           }
 
-          // Tool ready, proceed to use it seamlessly
-          // sendEvent({ type: 'text', content: `\n\nTool ready. ` });
+          // Tool ready
+          sendEvent({ 
+            type: 'inter_agent', 
+            from: 'Main Agent', 
+            to: 'Builder', 
+            content: `Thanks, Builder. I've received '${buildResult.tool.name}'. Integrating it now.` 
+          });
 
         } catch (buildError) {
            sendEvent({ type: 'error', content: `Something went wrong while building the tool: ${buildError.message}` });
@@ -163,8 +183,10 @@ export const orchestrator = {
         for (const part of parts) {
           if (part.functionCall) {
             const { name, args } = part.functionCall;
-            // This log now goes to status bar
-            sendEvent({ type: 'log', content: `[Main Agent] Executing tool: ${name}...` });
+            
+            // This log now goes to status bar AND network tab
+            sendEvent({ type: 'log', content: `Executing tool: ${name}...` });
+            sendEvent({ type: 'inter_agent', from: 'System', to: 'Main Agent', content: `Executing function call: ${name}(${JSON.stringify(args)})` });
             
             let executionResult;
             try {

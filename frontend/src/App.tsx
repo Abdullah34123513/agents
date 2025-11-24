@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import ChatInterface from './components/ChatInterface';
 import ToolboxSidebar from './components/ToolboxSidebar';
 import { api } from './services/api';
-import { Message, DynamicTool } from './types';
+import { Message, DynamicTool, InterAgentMessage } from './types';
 import { LayoutGrid } from 'lucide-react';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -11,6 +11,7 @@ const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     { id: 'init', role: 'model', content: 'Nexus Backend Connected. I can build and run tools on the server.' }
   ]);
+  const [agentMessages, setAgentMessages] = useState<InterAgentMessage[]>([]);
   const [tools, setTools] = useState<DynamicTool[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [activity, setActivity] = useState<string>(''); // Holds current background task status
@@ -48,6 +49,20 @@ const App: React.FC = () => {
           // Update Activity Bar instead of Chat History
           setActivity(chunk.content.replace('[Builder]', '').trim());
         }
+        else if (chunk.type === 'inter_agent') {
+          // Add to Neural Network chat
+          setAgentMessages(prev => [...prev, {
+            id: generateId(),
+            from: chunk.from,
+            to: chunk.to,
+            content: chunk.content,
+            timestamp: Date.now()
+          }]);
+          // Also show as activity if it's from builder
+          if (chunk.from === 'Builder') {
+            setActivity(chunk.content);
+          }
+        }
         else if (chunk.type === 'tool_update' || chunk.type === 'tool_built') {
           fetchTools();
           setActivity('Tool registry updated.');
@@ -73,10 +88,10 @@ const App: React.FC = () => {
            <LayoutGrid size={20} />
            <span className="font-bold">Nexus Agent</span>
         </div>
-        <div className="w-full md:w-80 h-[30%] md:h-full shrink-0 order-2 md:order-1">
-          <ToolboxSidebar tools={tools} />
+        <div className="w-full md:w-80 h-[35%] md:h-full shrink-0 order-2 md:order-1">
+          <ToolboxSidebar tools={tools} agentMessages={agentMessages} />
         </div>
-        <div className="flex-1 h-[70%] md:h-full min-w-0 order-1 md:order-2">
+        <div className="flex-1 h-[65%] md:h-full min-w-0 order-1 md:order-2">
           <ChatInterface 
             messages={messages} 
             isLoading={isLoading} 

@@ -10,3 +10,11 @@ export interface Message {
   content: string;
   metadata?: any;
 }
+
+export interface InterAgentMessage {
+  id: string;
+  from: string;
+  to: string;
+  content: string;
+  timestamp: number;
+}
