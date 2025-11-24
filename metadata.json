@@ -1,0 +1,5 @@
+{
+  "name": "Nexus: Self-Extending Agent",
+  "description": "An autonomous AI agent capable of designing, coding, and deploying its own tools in real-time to solve complex user requests.",
+  "requestFramePermissions": []
+}

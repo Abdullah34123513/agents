@@ -1,0 +1,88 @@
+import vm from 'vm';
+import { Type } from '@google/genai';
+
+class ToolRegistry {
+  constructor() {
+    this.tools = new Map();
+  }
+
+  register(toolSpec) {
+    // Convert simplified JSON schema to Gemini FunctionDeclaration
+    const declaration = {
+      name: toolSpec.toolName,
+      description: toolSpec.description,
+      parameters: {
+        type: Type.OBJECT,
+        properties: {},
+        required: toolSpec.parameters.required || []
+      }
+    };
+
+    // Map properties
+    for (const [key, val] of Object.entries(toolSpec.parameters.properties)) {
+      declaration.parameters.properties[key] = {
+        type: this._mapType(val.type),
+        description: val.description
+      };
+    }
+
+    const tool = {
+      name: toolSpec.toolName,
+      description: toolSpec.description,
+      declaration: declaration,
+      implementation: toolSpec.implementationBody,
+      createdAt: Date.now()
+    };
+
+    this.tools.set(tool.name, tool);
+    console.log(`[Registry] Registered tool: ${tool.name}`);
+    return tool;
+  }
+
+  getAll() {
+    return Array.from(this.tools.values());
+  }
+
+  getDeclarations() {
+    return Array.from(this.tools.values()).map(t => t.declaration);
+  }
+
+  execute(name, args) {
+    const tool = this.tools.get(name);
+    if (!tool) throw new Error(`Tool ${name} not found`);
+
+    try {
+      // Execute in a fresh context (Sandbox)
+      const context = vm.createContext({ console, args });
+      // Wrap code in an IIFE that returns the result
+      const code = `(function() { 
+        try {
+          ${tool.implementation}
+        } catch(e) {
+          throw e;
+        }
+      })()`;
+      
+      const result = vm.runInContext(code, context);
+      console.log(`[Registry] Executed ${name}:`, result);
+      return result;
+    } catch (error) {
+      console.error(`[Registry] Execution failed for ${name}:`, error);
+      throw new Error(`Tool execution error: ${error.message}`);
+    }
+  }
+
+  _mapType(typeStr) {
+    const map = {
+      'STRING': Type.STRING,
+      'NUMBER': Type.NUMBER,
+      'INTEGER': Type.INTEGER,
+      'BOOLEAN': Type.BOOLEAN,
+      'ARRAY': Type.ARRAY,
+      'OBJECT': Type.OBJECT
+    };
+    return map[typeStr.toUpperCase()] || Type.STRING;
+  }
+}
+
+export const toolRegistry = new ToolRegistry();
