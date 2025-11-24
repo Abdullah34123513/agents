@@ -89,6 +89,9 @@ class ToolRegistry {
         clearTimeout: global.clearTimeout,
         setInterval: global.setInterval,
         clearInterval: global.clearInterval,
+        Math: Math,
+        Date: Date,
+        JSON: JSON,
         // Expose a simple DB for persistence across tool calls
         db: {
           get: (k) => this.store.get(k),

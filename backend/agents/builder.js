@@ -7,33 +7,33 @@ dotenv.config();
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const BUILDER_PROMPT = `
-You are the "Builder Agent". You are a senior JavaScript engineer.
-Your goal is to build a robust, ASYNCHRONOUS JavaScript tool and TEST cases for it.
-The environment supports 'fetch' for network requests.
-IMPORTANT: The code must be compatible with Node.js 'vm' context (no 'require', 'import', or DOM access like 'document' or 'window').
+You are the "Builder Agent", an Elite Senior Software Architect.
+Your goal is to build a robust, ASYNCHRONOUS JavaScript tool and comprehensive TEST cases for it.
 
-AVAILABLE GLOBALS:
-- fetch, URL, URLSearchParams
-- db: A simple persistent key-value store. 
-    - db.set(key, value): void
-    - db.get(key): any
-    - db.delete(key): boolean
-    - db.list(): string[] (returns keys)
+ENVIRONMENT:
+- Runtime: Node.js 'vm' sandbox (No 'require', 'import', 'fs', 'process').
+- Network: 'fetch' is available.
+- Persistence: 'db' object available (db.set, db.get, db.delete, db.list).
+- Globals: console, URL, URLSearchParams, setTimeout, Math, Date, JSON.
 
-Input: Tool Requirement.
+INSTRUCTIONS:
+1. **Analyze**: First, think step-by-step about the requirements, edge cases, and potential failures.
+2. **Design**: Create a function that handles inputs defensively (check types, handle missing args).
+3. **Test**: Generate positive tests (happy path) AND negative tests (edge cases, invalid inputs).
 
-Output JSON:
+Output JSON only. Structure:
 {
+  "thoughtProcess": "Brief explanation of the implementation strategy...",
   "toolName": "camelCaseName",
-  "description": "Short description",
+  "description": "Clear description",
   "parameters": {
     "type": "OBJECT",
     "properties": {
-       // Open API 3.0 properties
+       // Open API 3.0 properties with detailed descriptions
     },
-    "required": ["param1"]
+    "required": ["list", "of", "required", "params"]
   },
-  "implementationBody": "// Example: db.set('username', args.name); return 'Saved ' + args.name;",
+  "implementationBody": "// Javascript code. Use async/await. validation logic is mandatory. \\n// Example: \\nif(!args.url) throw new Error('Missing URL');\\nconst res = await fetch(args.url);",
   "testCases": [
     { 
       "args": { "n": 5 }, 
@@ -41,9 +41,9 @@ Output JSON:
       "description": "Should calculate factorial of 5"
     },
     {
-      "args": { "query": "latest" },
-      "expectedType": "array", 
-      "description": "Should return a list of items for non-deterministic tools"
+      "args": { "n": -1 },
+      "shouldError": true,
+      "description": "Should throw error for negative input"
     }
   ]
 }
@@ -79,6 +79,9 @@ export const builder = {
     // 1. Initial Design
     try {
       currentSpec = await this.generateSpec(requirement);
+      if (currentSpec.thoughtProcess) {
+         logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `Strategy: ${currentSpec.thoughtProcess}` });
+      }
       logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `I've drafted a design for '${currentSpec.toolName}'. Starting implementation...` });
     } catch (e) {
       throw new Error(`Failed to generate initial design: ${e.message}`);
@@ -96,7 +99,7 @@ export const builder = {
         const testResult = await this.runTests(currentSpec);
 
         if (testResult.success) {
-          logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `✅ All tests passed. The tool '${currentSpec.toolName}' is verified and ready.` });
+          logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `✅ All ${currentSpec.testCases.length} tests passed. The tool '${currentSpec.toolName}' is verified and ready.` });
           return {
             tool: toolRegistry.get(currentSpec.toolName),
             status: 'success'
@@ -182,6 +185,11 @@ export const builder = {
         // await the execution since tools are now async
         const result = await toolRegistry.execute(spec.toolName, test.args);
         
+        // Negative Testing: If we expected an error but got a result, FAIL.
+        if (test.shouldError) {
+           throw new Error(`Expected tool to throw error, but it returned: ${JSON.stringify(result)}`);
+        }
+        
         if (result === undefined) {
            throw new Error("Function returned undefined");
         }
@@ -204,6 +212,11 @@ export const builder = {
         }
 
       } catch (e) {
+        // Negative Testing: If we expected an error and got one, SUCCESS.
+        if (test.shouldError) {
+            continue; // Test passed
+        }
+
         // Detect Auth Errors
         const msg = e.message.toLowerCase();
         if (
