@@ -14,16 +14,18 @@ class ToolRegistry {
       parameters: {
         type: Type.OBJECT,
         properties: {},
-        required: toolSpec.parameters.required || []
+        required: toolSpec.parameters?.required || []
       }
     };
 
-    // Map properties
-    for (const [key, val] of Object.entries(toolSpec.parameters.properties)) {
-      declaration.parameters.properties[key] = {
-        type: this._mapType(val.type),
-        description: val.description
-      };
+    // Map properties if they exist
+    if (toolSpec.parameters?.properties) {
+      for (const [key, val] of Object.entries(toolSpec.parameters.properties)) {
+        declaration.parameters.properties[key] = {
+          type: this._mapType(val.type),
+          description: val.description
+        };
+      }
     }
 
     const tool = {
@@ -57,11 +59,17 @@ class ToolRegistry {
     if (!tool) throw new Error(`Tool ${name} not found`);
 
     try {
-      // Execute in a fresh context (Sandbox) with FETCH access
+      // Execute in a fresh context (Sandbox) with FETCH and common Globals
       const context = vm.createContext({ 
         console, 
         args, 
-        fetch: global.fetch // Enable network access
+        fetch: global.fetch,
+        URL: global.URL,
+        URLSearchParams: global.URLSearchParams,
+        setTimeout: global.setTimeout,
+        clearTimeout: global.clearTimeout,
+        setInterval: global.setInterval,
+        clearInterval: global.clearInterval
       });
 
       // Wrap code in an async IIFE
@@ -83,6 +91,7 @@ class ToolRegistry {
   }
 
   _mapType(typeStr) {
+    if (!typeStr) return Type.STRING;
     const map = {
       'STRING': Type.STRING,
       'NUMBER': Type.NUMBER,

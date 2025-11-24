@@ -10,6 +10,7 @@ const BUILDER_PROMPT = `
 You are the "Builder Agent". You are a senior JavaScript engineer.
 Your goal is to build a robust, ASYNCHRONOUS JavaScript tool and TEST cases for it.
 The environment supports 'fetch' for network requests.
+IMPORTANT: The code must be compatible with Node.js 'vm' context (no 'require', 'import', or DOM access like 'document' or 'window'). Use 'fetch', 'URL', 'URLSearchParams'.
 
 Input: Tool Requirement.
 
@@ -44,6 +45,7 @@ Input:
 
 Output:
 The complete, corrected JSON object (same structure as Builder).
+Ensure valid JSON. Do not wrap in markdown.
 `;
 
 export const builder = {
@@ -72,28 +74,29 @@ export const builder = {
       attempts++;
       logCallback({ type: 'log', content: `[Builder] Cycle ${attempts}/${maxAttempts}: Running tests...` });
 
-      // Register temporarily to test execution
-      toolRegistry.register(currentSpec);
-
-      const testResult = await this.runTests(currentSpec);
-
-      if (testResult.success) {
-        logCallback({ type: 'log', content: `[Builder] ✅ All tests passed.` });
-        return {
-          tool: toolRegistry.get(currentSpec.toolName),
-          logs: `Builder Agent: The tool building is finished. I have built and verified '${currentSpec.toolName}'.`
-        };
-      }
-
-      // Test Failed
-      lastError = testResult.error;
-      logCallback({ type: 'log', content: `[Builder] ❌ Test failed: ${lastError}. Fixing code...` });
-
-      // 3. Self-Correction
       try {
+        // Register temporarily to test execution
+        toolRegistry.register(currentSpec);
+        const testResult = await this.runTests(currentSpec);
+
+        if (testResult.success) {
+          logCallback({ type: 'log', content: `[Builder] ✅ All tests passed.` });
+          return {
+            tool: toolRegistry.get(currentSpec.toolName),
+            logs: `Builder Agent: The tool building is finished. I have built and verified '${currentSpec.toolName}'.`
+          };
+        }
+
+        // Test Failed
+        lastError = testResult.error;
+        logCallback({ type: 'log', content: `[Builder] ❌ Test failed: ${lastError}. Fixing code...` });
+
+        // 3. Self-Correction
         currentSpec = await this.fixSpec(currentSpec, lastError);
+
       } catch (e) {
-        throw new Error(`Builder crashed during self-correction: ${e.message}`);
+        console.error("Builder Loop Error:", e);
+        throw new Error(`Builder crashed during verification: ${e.message}`);
       }
     }
 
@@ -110,7 +113,7 @@ export const builder = {
         temperature: 0.2
       }
     });
-    return JSON.parse(response.text);
+    return this._parseJson(response.text);
   },
 
   async fixSpec(brokenSpec, errorMsg) {
@@ -129,7 +132,7 @@ export const builder = {
         responseMimeType: "application/json"
       }
     });
-    return JSON.parse(response.text);
+    return this._parseJson(response.text);
   },
 
   async runTests(spec) {
@@ -150,5 +153,18 @@ export const builder = {
     }
 
     return { success: true };
+  },
+
+  // Helper to reliably parse JSON from LLM output, stripping markdown
+  _parseJson(text) {
+    if (!text) throw new Error("Empty response from model");
+    try {
+      // Remove ```json and ``` if present
+      let clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      return JSON.parse(clean);
+    } catch (e) {
+      console.error("JSON Parse Error. Raw text:", text);
+      throw new Error("Failed to parse tool specification from model output");
+    }
   }
 };
