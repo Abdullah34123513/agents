@@ -7,10 +7,20 @@ class ToolRegistry {
   }
 
   register(toolSpec) {
+    // 1. Validate Tool Name (Must match Gemini's requirements)
+    // Must start with a letter or underscore. 
+    // Must be alphanumeric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-).
+    const nameRegex = /^[a-zA-Z_][\w.:-]{0,63}$/;
+    
+    if (!toolSpec.toolName || !nameRegex.test(toolSpec.toolName)) {
+      console.error(`[Registry] Invalid tool name rejected: '${toolSpec.toolName}'`);
+      throw new Error(`Invalid tool name: '${toolSpec.toolName}'. Names must start with a letter and contain only alphanumerics, underscores, dots, or dashes.`);
+    }
+
     // Convert simplified JSON schema to Gemini FunctionDeclaration
     const declaration = {
       name: toolSpec.toolName,
-      description: toolSpec.description,
+      description: toolSpec.description || "No description provided",
       parameters: {
         type: Type.OBJECT,
         properties: {},

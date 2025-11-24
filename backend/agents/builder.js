@@ -45,6 +45,7 @@ Input:
 
 Output:
 The complete, corrected JSON object (same structure as Builder).
+Ensure the "toolName" remains the same unless it was invalid.
 Ensure valid JSON. Do not wrap in markdown.
 `;
 
@@ -92,11 +93,24 @@ export const builder = {
         logCallback({ type: 'log', content: `[Builder] ❌ Test failed: ${lastError}. Fixing code...` });
 
         // 3. Self-Correction
+        const originalName = currentSpec.toolName;
         currentSpec = await this.fixSpec(currentSpec, lastError);
+        
+        // Critical: Ensure we don't lose the tool name if the LLM hallucinated/omitted it
+        if (!currentSpec.toolName && originalName) {
+           currentSpec.toolName = originalName;
+        }
 
       } catch (e) {
         console.error("Builder Loop Error:", e);
-        throw new Error(`Builder crashed during verification: ${e.message}`);
+        // Use fallback error message if available
+        const msg = e.message || "Unknown error";
+        
+        if (attempts >= maxAttempts) {
+             throw new Error(`Builder Agent failed after ${maxAttempts} attempts. Last error: ${msg}`);
+        }
+        // If it was a registration error (invalid name), try to fix it in next loop or just fail if crucial
+        lastError = msg;
       }
     }
 
