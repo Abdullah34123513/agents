@@ -11,6 +11,7 @@ const DECISION_PROMPT = `
 You are the "Main Agent". You are helpful and conversational.
 Decide the next action based on the user's message and available tools.
 
+Current System Status: {{STATUS}}
 Available Tools: {{TOOLS}}
 
 1. "BUILD_TOOL": Use this if the user asks for:
@@ -22,6 +23,7 @@ Available Tools: {{TOOLS}}
     - The user PROVIDES an API Key, token, or credentials (e.g., "here is my key", "sk-...", "use this api key"). In this case, 'details' should be "Inject this API key: [KEY] into the tool [TOOL_NAME]".
 3. "DELETE_TOOL": Use this if the user specifically asks to delete or remove an EXISTING tool.
 4. "CHAT": Use this for general conversation, OR if you can use an EXISTING tool from the list above without modification.
+   - If the Current System Status is "BUILDING", and the user asks about progress, choose CHAT to answer them patiently.
 
 Output JSON: 
 { 
@@ -35,23 +37,32 @@ Output JSON:
 const sessions = new Map();
 
 export const orchestrator = {
-  // Now accepts a callback 'sendEvent' to stream chunks to the frontend
-  async processUserMessage(sessionId, message, sendEvent) {
-    // 1. Initialize History
-    let history = sessions.get(sessionId);
-    if (!history) {
-      history = [
-        { role: 'user', parts: [{ text: "System: You are Nexus. You work with a Builder Agent. If you lack a capability (like fetching news), you should build a tool for it." }] },
-        { role: 'model', parts: [{ text: "Understood. I am the Main Agent. I will coordinate with the Builder to expand my capabilities." }] }
-      ];
+  /**
+   * Processes a message.
+   * @param {string} sessionId 
+   * @param {string} message 
+   * @param {function} sendEvent - Sends immediate response to the HTTP stream.
+   * @param {function} broadcastEvent - Sends background events to the SSE stream.
+   */
+  async processUserMessage(sessionId, message, sendEvent, broadcastEvent) {
+    // 1. Initialize Session
+    let session = sessions.get(sessionId);
+    if (!session) {
+      session = {
+        history: [
+          { role: 'user', parts: [{ text: "System: You are Nexus. You work with a Builder Agent. If you lack a capability (like fetching news), you should build a tool for it." }] },
+          { role: 'model', parts: [{ text: "Understood. I am the Main Agent. I will coordinate with the Builder to expand my capabilities." }] }
+        ],
+        status: 'IDLE' // IDLE | BUILDING
+      };
+      sessions.set(sessionId, session);
     }
 
     const toolNames = toolRegistry.getAll().map(t => t.name).join(', ');
 
     try {
       // 2. Decide Intent
-      // Include recent history for context (handle "Yes/No" flows)
-      const recentHistory = history.slice(-4).map(h => `${h.role.toUpperCase()}: ${h.parts[0].text}`).join('\n');
+      const recentHistory = session.history.slice(-4).map(h => `${h.role.toUpperCase()}: ${h.parts[0].text}`).join('\n');
 
       const decisionContext = `
       Conversation History:
@@ -60,11 +71,15 @@ export const orchestrator = {
       User Message: ${message}
       `;
 
+      const prompt = DECISION_PROMPT
+        .replace('{{TOOLS}}', toolNames)
+        .replace('{{STATUS}}', session.status);
+
       const decisionReq = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: decisionContext,
         config: {
-          systemInstruction: DECISION_PROMPT.replace('{{TOOLS}}', toolNames),
+          systemInstruction: prompt,
           responseMimeType: "application/json"
         }
       });
@@ -76,7 +91,7 @@ export const orchestrator = {
          const name = decision.toolName;
          if (toolRegistry.delete(name)) {
              sendEvent({ type: 'text', content: `I have deleted the tool "${name}".` });
-             sendEvent({ type: 'tool_update' }); // Triggers refresh on frontend
+             broadcastEvent({ type: 'tool_update' }); 
          } else {
              sendEvent({ type: 'text', content: `I couldn't find a tool named "${name}" to delete.` });
          }
@@ -84,79 +99,97 @@ export const orchestrator = {
          return;
       }
 
-      // --- HANDLE UPDATE or BUILD ---
+      // --- HANDLE UPDATE or BUILD (ASYNC) ---
       if (decision.action === 'BUILD_TOOL' || decision.action === 'UPDATE_TOOL') {
         const isUpdate = decision.action === 'UPDATE_TOOL';
-        const msg = isUpdate 
-           ? `I'll coordinate with the Builder to update "${decision.toolName}".`
-           : `I'll ask the Builder Agent to create a tool for that.`;
         
-        sendEvent({ type: 'text', content: msg });
+        // Immediate Response
+        const responseText = isUpdate 
+           ? `I've asked the Builder to update "${decision.toolName}". I'll let you know when it's done.`
+           : `I've instructed the Builder to create a new tool for that. You can continue chatting with me while it works.`;
         
-        // If Update, construct a richer context for the builder
-        let builderRequirement = decision.details || message;
-        if (isUpdate) {
-            const oldTool = toolRegistry.get(decision.toolName);
-            if (oldTool) {
-                builderRequirement = `Update the existing tool '${decision.toolName}'. \n\nOriginal Description: ${oldTool.description}\nOriginal Code: ${oldTool.implementation}\n\nModification Request: ${decision.details}`;
-            } else {
-                builderRequirement = `Update tool '${decision.toolName}'. Request: ${decision.details}`;
+        sendEvent({ type: 'text', content: responseText });
+        sendEvent({ type: 'done' }); // Close the HTTP request immediately
+
+        // Update History
+        session.history.push({ role: 'user', parts: [{ text: message }] });
+        session.history.push({ role: 'model', parts: [{ text: responseText }] });
+        session.status = 'BUILDING';
+        sessions.set(sessionId, session);
+
+        // --- Start Background Task ---
+        (async () => {
+            let builderRequirement = decision.details || message;
+            if (isUpdate) {
+                const oldTool = toolRegistry.get(decision.toolName);
+                if (oldTool) {
+                    builderRequirement = `Update the existing tool '${decision.toolName}'. \n\nOriginal Description: ${oldTool.description}\nOriginal Code: ${oldTool.implementation}\n\nModification Request: ${decision.details}`;
+                } else {
+                    builderRequirement = `Update tool '${decision.toolName}'. Request: ${decision.details}`;
+                }
             }
-        }
 
-        // Notify Builder (Visible in Network Tab)
-        sendEvent({ 
-          type: 'inter_agent', 
-          from: 'Main Agent', 
-          to: 'Builder', 
-          content: `Requesting ${isUpdate ? 'update' : 'new tool'}: ${builderRequirement}` 
-        });
+            // Notify via SSE
+            broadcastEvent({ 
+              type: 'inter_agent', 
+              from: 'Main Agent', 
+              to: 'Builder', 
+              content: `Requesting ${isUpdate ? 'update' : 'new tool'}: ${builderRequirement}` 
+            });
 
-        try {
-          // Delegation: Wait for Builder to Finish, while streaming logs
-          const buildResult = await builder.buildAndVerify(builderRequirement, (log) => {
-             // Pass builder logs to frontend
-             sendEvent(log);
-          });
-          
-          sendEvent({ type: 'tool_update', tool: buildResult.tool }); 
-          
-          // Handle Missing Key Scenario
-          if (buildResult.status === 'missing_key') {
-             sendEvent({ 
-                type: 'inter_agent', 
-                from: 'Builder', 
-                to: 'Main Agent', 
-                content: `I built '${buildResult.tool.name}', but authentication failed. It needs an API Key.` 
-             });
-             sendEvent({ type: 'text', content: `\n\nIt seems '${buildResult.tool.name}' requires an API Key. Please provide it so I can finish the setup.` });
-             
-             // Update history
-             history.push({ role: 'user', parts: [{ text: message }] });
-             history.push({ role: 'model', parts: [{ text: `I built '${buildResult.tool.name}' but it needs an API Key.` }] });
-             sessions.set(sessionId, history);
-             sendEvent({ type: 'done' });
-             return;
-          }
+            try {
+              // Delegate to Builder
+              const buildResult = await builder.buildAndVerify(builderRequirement, (log) => {
+                 broadcastEvent(log);
+              });
+              
+              broadcastEvent({ type: 'tool_update', tool: buildResult.tool }); 
+              
+              if (buildResult.status === 'missing_key') {
+                 broadcastEvent({ 
+                    type: 'inter_agent', 
+                    from: 'Builder', 
+                    to: 'Main Agent', 
+                    content: `I built '${buildResult.tool.name}', but authentication failed. It needs an API Key.` 
+                 });
+                 // Send a text message via SSE to prompt the user
+                 broadcastEvent({ type: 'text', content: `The tool '${buildResult.tool.name}' is ready, but it needs an API Key to function. Please provide it when you can.` });
+              } else {
+                 broadcastEvent({ 
+                    type: 'inter_agent', 
+                    from: 'Builder', 
+                    to: 'Main Agent', 
+                    content: `Task complete. '${buildResult.tool.name}' is verified.` 
+                 });
+                 broadcastEvent({ 
+                    type: 'inter_agent', 
+                    from: 'Main Agent', 
+                    to: 'Builder', 
+                    content: `Acknowledged. I will use it for future requests.` 
+                 });
+                 // Optional: Notify user textually via SSE
+                 // broadcastEvent({ type: 'text', content: `The tool '${buildResult.tool.name}' is now ready to use.` });
+              }
 
-          // Tool ready
-          sendEvent({ 
-            type: 'inter_agent', 
-            from: 'Main Agent', 
-            to: 'Builder', 
-            content: `Thanks, Builder. I've received '${buildResult.tool.name}'. Integrating it now.` 
-          });
+            } catch (buildError) {
+               broadcastEvent({ type: 'error', content: `Builder Error: ${buildError.message}` });
+            } finally {
+               // Reset status
+               const currentSession = sessions.get(sessionId);
+               if (currentSession) {
+                   currentSession.status = 'IDLE';
+                   sessions.set(sessionId, currentSession);
+               }
+            }
+        })();
 
-        } catch (buildError) {
-           sendEvent({ type: 'error', content: `Something went wrong while building the tool: ${buildError.message}` });
-           return;
-        }
+        return; 
       }
 
-      // 4. Chat Loop (Execution Phase)
+      // 4. Chat Loop (Execution Phase) - Synchronous for normal chat
       const chat = ai.chats.create({
         model: 'gemini-2.5-flash',
-        history: history,
+        history: session.history,
         config: {
           tools: toolRegistry.getDeclarations().length > 0 
             ? [{ functionDeclarations: toolRegistry.getDeclarations() }] 
@@ -164,10 +197,8 @@ export const orchestrator = {
         }
       });
 
-      // Send user message to model
       let result = await chat.sendMessage({ message: message });
       
-      // Handle Function Calls
       let functionCallAttempts = 0;
       const MAX_FUNCTION_CALLS = 5;
 
@@ -184,9 +215,9 @@ export const orchestrator = {
           if (part.functionCall) {
             const { name, args } = part.functionCall;
             
-            // This log now goes to status bar AND network tab
-            sendEvent({ type: 'log', content: `Executing tool: ${name}...` });
-            sendEvent({ type: 'inter_agent', from: 'System', to: 'Main Agent', content: `Executing function call: ${name}(${JSON.stringify(args)})` });
+            // Log to background stream
+            broadcastEvent({ type: 'log', content: `Executing tool: ${name}...` });
+            broadcastEvent({ type: 'inter_agent', from: 'Main Agent', to: 'System', content: `Calling ${name}(${JSON.stringify(args)})` });
             
             let executionResult;
             try {
@@ -208,10 +239,9 @@ export const orchestrator = {
 
       const finalText = result.text;
       
-      // Update History
-      history.push({ role: 'user', parts: [{ text: message }] });
-      history.push({ role: 'model', parts: [{ text: finalText }] });
-      sessions.set(sessionId, history);
+      session.history.push({ role: 'user', parts: [{ text: message }] });
+      session.history.push({ role: 'model', parts: [{ text: finalText }] });
+      sessions.set(sessionId, session);
 
       sendEvent({ type: 'text', content: finalText });
       sendEvent({ type: 'done' });

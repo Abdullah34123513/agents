@@ -1,4 +1,4 @@
-const API_URL = 'http://localhost:3000/api';
+const API_URL = '/api'; // Use relative path since we have proxy in vite config
 
 export const api = {
   // Standard fetch for tools
@@ -7,12 +7,16 @@ export const api = {
     return res.json();
   },
 
+  getEventStreamUrl(sessionId: string) {
+    return `${API_URL}/events?sessionId=${sessionId}`;
+  },
+
   // Streaming fetch for chat
-  async streamChat(message: string, onChunk: (chunk: any) => void) {
+  async streamChat(message: string, sessionId: string, onChunk: (chunk: any) => void) {
     const response = await fetch(`${API_URL}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message, sessionId })
     });
 
     const reader = response.body?.getReader();
@@ -28,8 +32,7 @@ export const api = {
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       
-      // Process all complete lines
-      buffer = lines.pop() || ''; // Keep the incomplete last line in buffer
+      buffer = lines.pop() || ''; 
 
       for (const line of lines) {
         if (line.trim()) {

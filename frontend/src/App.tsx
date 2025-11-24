@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ChatInterface from './components/ChatInterface';
 import ToolboxSidebar from './components/ToolboxSidebar';
 import { api } from './services/api';
@@ -8,13 +8,20 @@ import { LayoutGrid } from 'lucide-react';
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 const App: React.FC = () => {
+  // Persistent Session ID
+  const sessionId = useRef(generateId()).current;
+
   const [messages, setMessages] = useState<Message[]>([
     { id: 'init', role: 'model', content: 'Nexus Backend Connected. I can build and run tools on the server.' }
   ]);
   const [agentMessages, setAgentMessages] = useState<InterAgentMessage[]>([]);
   const [tools, setTools] = useState<DynamicTool[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [activity, setActivity] = useState<string>(''); // Holds current background task status
+  
+  // Track active chat request
+  const [isChatting, setIsChatting] = useState(false);
+  
+  // Track background activity
+  const [activity, setActivity] = useState<string>(''); 
 
   const fetchTools = async () => {
     try {
@@ -23,61 +30,95 @@ const App: React.FC = () => {
     } catch(e) { console.error(e); }
   };
 
-  useEffect(() => { fetchTools(); }, []);
+  useEffect(() => { 
+    fetchTools(); 
+
+    // --- SSE Connection for Background Events ---
+    const eventSource = new EventSource(api.getEventStreamUrl(sessionId));
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        // Ping
+        if (data.type === 'ping') return;
+
+        // Background Logs
+        if (data.type === 'log') {
+          setActivity(data.content.replace('[Builder]', '').trim());
+        }
+        // Inter-Agent Chat
+        else if (data.type === 'inter_agent') {
+          setAgentMessages(prev => [...prev, {
+            id: generateId(),
+            from: data.from,
+            to: data.to,
+            content: data.content,
+            timestamp: Date.now()
+          }]);
+          if (data.from === 'Builder') {
+             setActivity(`Builder: ${data.content}`);
+          }
+        }
+        // Tool Updates
+        else if (data.type === 'tool_update') {
+          fetchTools();
+          setActivity('Tool registry updated.');
+          setTimeout(() => setActivity(''), 3000);
+        }
+        // Async Text (Main Agent speaking from background)
+        else if (data.type === 'text') {
+             setMessages(prev => [...prev, { id: generateId(), role: 'model', content: data.content }]);
+        }
+        // Errors
+        else if (data.type === 'error') {
+           setMessages(prev => [...prev, { id: generateId(), role: 'system', content: `Error: ${data.content}` }]);
+        }
+
+      } catch (e) {
+        console.error("SSE Error", e);
+      }
+    };
+
+    eventSource.onerror = (e) => {
+      console.error("EventSource failed:", e);
+      eventSource.close();
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [sessionId]);
 
   const handleSend = async (text: string) => {
-    // 1. Add User Message
     const userMsg: Message = { id: generateId(), role: 'user', content: text };
     setMessages(prev => [...prev, userMsg]);
     
-    // 2. Prepare Placeholder for Bot Response
+    // Prepare bot message bubble
     const botMsgId = generateId();
     setMessages(prev => [...prev, { id: botMsgId, role: 'model', content: '' }]);
-    setIsLoading(true);
-    setActivity('Thinking...');
+    
+    setIsChatting(true);
+    setActivity('Processing...');
 
     try {
-      // 3. Stream Response
-      await api.streamChat(text, (chunk) => {
+      await api.streamChat(text, sessionId, (chunk) => {
         if (chunk.type === 'text') {
-          // Append text to the specific bot message
           setMessages(prev => prev.map(m => 
             m.id === botMsgId ? { ...m, content: m.content + chunk.content } : m
           ));
         } 
-        else if (chunk.type === 'log') {
-          // Update Activity Bar instead of Chat History
-          setActivity(chunk.content.replace('[Builder]', '').trim());
-        }
-        else if (chunk.type === 'inter_agent') {
-          // Add to Neural Network chat
-          setAgentMessages(prev => [...prev, {
-            id: generateId(),
-            from: chunk.from,
-            to: chunk.to,
-            content: chunk.content,
-            timestamp: Date.now()
-          }]);
-          // Also show as activity if it's from builder
-          if (chunk.from === 'Builder') {
-            setActivity(chunk.content);
-          }
-        }
-        else if (chunk.type === 'tool_update' || chunk.type === 'tool_built') {
-          fetchTools();
-          setActivity('Tool registry updated.');
-        }
-        else if (chunk.type === 'error') {
-          // Errors still go to chat for visibility, but styled differently
-           setMessages(prev => [...prev, { id: generateId(), role: 'system', content: `Error: ${chunk.content}` }]);
+        // Note: 'log' and 'inter_agent' now come via SSE mostly, 
+        // but we handle them here too just in case the backend sends them via HTTP stream.
+        else if (chunk.type === 'done') {
+           // Request finished
         }
       });
-
     } catch (e) {
       setMessages(prev => [...prev, { id: generateId(), role: 'system', content: 'Connection Error' }]);
     } finally {
-      setIsLoading(false);
-      setActivity('');
+      setIsChatting(false);
+      // Don't clear activity here immediately, as background build might still be running via SSE
     }
   };
 
@@ -94,9 +135,9 @@ const App: React.FC = () => {
         <div className="flex-1 h-[65%] md:h-full min-w-0 order-1 md:order-2">
           <ChatInterface 
             messages={messages} 
-            isLoading={isLoading} 
+            isLoading={isChatting} 
             onSendMessage={handleSend}
-            status={activity || (isLoading ? 'processing' : 'idle')}
+            status={activity}
           />
         </div>
       </div>
