@@ -34,9 +34,14 @@ class ToolRegistry {
       createdAt: Date.now()
     };
 
+    // Overwrite if exists (useful for the Builder's fix loop)
     this.tools.set(tool.name, tool);
     console.log(`[Registry] Registered tool: ${tool.name}`);
     return tool;
+  }
+
+  get(name) {
+    return this.tools.get(name);
   }
 
   getAll() {
@@ -64,7 +69,6 @@ class ToolRegistry {
       })()`;
       
       const result = vm.runInContext(code, context);
-      console.log(`[Registry] Executed ${name}:`, result);
       return result;
     } catch (error) {
       console.error(`[Registry] Execution failed for ${name}:`, error);
