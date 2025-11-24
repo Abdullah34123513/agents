@@ -8,9 +8,7 @@ class ToolRegistry {
   }
 
   register(toolSpec) {
-    // 1. Validate Tool Name (Must match Gemini's requirements)
-    // Must start with a letter or underscore. 
-    // Must be alphanumeric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-).
+    // 1. Validate Tool Name
     const nameRegex = /^[a-zA-Z_][\w.:-]{0,63}$/;
     
     if (!toolSpec.toolName || !nameRegex.test(toolSpec.toolName)) {
@@ -47,7 +45,6 @@ class ToolRegistry {
       createdAt: Date.now()
     };
 
-    // Overwrite if exists (useful for the Builder's fix loop)
     this.tools.set(tool.name, tool);
     console.log(`[Registry] Registered tool: ${tool.name}`);
     return tool;
@@ -78,10 +75,20 @@ class ToolRegistry {
     if (!tool) throw new Error(`Tool ${name} not found`);
 
     try {
+      // Utilities injected into the sandbox
+      const utils = {
+        sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
+        uuid: () => Math.random().toString(36).substring(2) + Date.now().toString(36),
+        safeJsonParse: (str, fallback) => { try { return JSON.parse(str); } catch { return fallback; } },
+        pick: (obj, keys) => keys.reduce((acc, k) => (k in obj ? { ...acc, [k]: obj[k] } : acc), {}),
+        omit: (obj, keys) => Object.keys(obj).filter(k => !keys.includes(k)).reduce((acc, k) => ({ ...acc, [k]: obj[k] }), {})
+      };
+
       // Execute in a fresh context (Sandbox) with FETCH and common Globals
       const context = vm.createContext({ 
         console, 
         args, 
+        utils, // New Utils
         fetch: global.fetch,
         URL: global.URL,
         URLSearchParams: global.URLSearchParams,

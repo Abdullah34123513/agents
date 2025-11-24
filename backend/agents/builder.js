@@ -11,19 +11,29 @@ You are the "Builder Agent", an Elite Senior Software Architect.
 Your goal is to build a robust, ASYNCHRONOUS JavaScript tool and comprehensive TEST cases for it.
 
 ENVIRONMENT:
-- Runtime: Node.js 'vm' sandbox (No 'require', 'import', 'fs', 'process').
+- Runtime: Node.js 'vm' sandbox.
 - Network: 'fetch' is available.
-- Persistence: 'db' object available (db.set, db.get, db.delete, db.list).
+- Persistence: 'db' (simple kv store).
+- Utils: 'utils' object available: { sleep(ms), uuid(), safeJsonParse(str, fallback), pick(obj, keys) }.
 - Globals: console, URL, URLSearchParams, setTimeout, Math, Date, JSON.
 
 INSTRUCTIONS:
-1. **Analyze**: First, think step-by-step about the requirements, edge cases, and potential failures.
-2. **Design**: Create a function that handles inputs defensively (check types, handle missing args).
-3. **Test**: Generate positive tests (happy path) AND negative tests (edge cases, invalid inputs).
+1. **Chain-of-Thought Analysis**:
+   - Analyze requirements deeply.
+   - Identify external dependencies (API endpoints) and potential failure modes (404, 429, 500 errors).
+   - Plan for edge cases (null inputs, empty strings, network timeouts).
+2. **Defensive Implementation**:
+   - Validate ALL inputs at the start of the function.
+   - Use 'utils.sleep' for polling or rate-limit backoff if needed.
+   - Handle API errors gracefully (throw clear, descriptive errors).
+3. **Verification Strategy**:
+   - **Positive Tests**: Standard happy path.
+   - **Negative Tests**: Invalid inputs (must throw).
+   - **Edge Case Tests**: Boundary values.
 
 Output JSON only. Structure:
 {
-  "thoughtProcess": "Brief explanation of the implementation strategy...",
+  "thoughtProcess": "1. Analysis: ... 2. Strategy: ... 3. Risks: ...",
   "toolName": "camelCaseName",
   "description": "Clear description",
   "parameters": {
@@ -33,7 +43,7 @@ Output JSON only. Structure:
     },
     "required": ["list", "of", "required", "params"]
   },
-  "implementationBody": "// Javascript code. Use async/await. validation logic is mandatory. \\n// Example: \\nif(!args.url) throw new Error('Missing URL');\\nconst res = await fetch(args.url);",
+  "implementationBody": "// Javascript code. Use async/await. \\n// Example: \\nif(!args.id) throw new Error('Missing ID');\\nconst res = await fetch('...');",
   "testCases": [
     { 
       "args": { "n": 5 }, 
@@ -66,7 +76,6 @@ Ensure valid JSON. Do not wrap in markdown.
 export const builder = {
   /**
    * Orchestrates the Build -> Test -> Fix loop.
-   * Now supports streaming logs via callback.
    */
   async buildAndVerify(requirement, logCallback = () => {}) {
     let attempts = 0;
@@ -80,7 +89,8 @@ export const builder = {
     try {
       currentSpec = await this.generateSpec(requirement);
       if (currentSpec.thoughtProcess) {
-         logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `Strategy: ${currentSpec.thoughtProcess}` });
+         // Stream the thought process in chunks if it's long, or just a summary
+         logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `Plan: ${currentSpec.thoughtProcess.substring(0, 100)}...` });
       }
       logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `I've drafted a design for '${currentSpec.toolName}'. Starting implementation...` });
     } catch (e) {
@@ -182,8 +192,14 @@ export const builder = {
 
     for (const [i, test] of spec.testCases.entries()) {
       try {
-        // await the execution since tools are now async
-        const result = await toolRegistry.execute(spec.toolName, test.args);
+        // Enforce a timeout for tool execution to prevent infinite loops
+        const EXECUTION_TIMEOUT = 5000;
+        const executionPromise = toolRegistry.execute(spec.toolName, test.args);
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Execution timed out after ${EXECUTION_TIMEOUT}ms`)), EXECUTION_TIMEOUT)
+        );
+
+        const result = await Promise.race([executionPromise, timeoutPromise]);
         
         // Negative Testing: If we expected an error but got a result, FAIL.
         if (test.shouldError) {
