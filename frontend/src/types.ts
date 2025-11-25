@@ -6,7 +6,7 @@ export interface DynamicTool {
 
 export interface Message {
   id: string;
-  role: 'user' | 'model' | 'system';
+  role: 'user' | 'model' | 'system' | 'builder';
   content: string;
   metadata?: any;
 }

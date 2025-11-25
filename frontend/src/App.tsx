@@ -68,7 +68,9 @@ const App: React.FC = () => {
         }
         // Async Text (Main Agent speaking from background)
         else if (data.type === 'text') {
-             setMessages(prev => [...prev, { id: generateId(), role: 'model', content: data.content }]);
+             // Supports explicit roles like 'builder'
+             const role = data.role || 'model';
+             setMessages(prev => [...prev, { id: generateId(), role: role, content: data.content }]);
         }
         // Errors
         else if (data.type === 'error') {

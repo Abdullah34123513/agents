@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Message } from '../types';
-import { Terminal, Cpu, User, Wrench, Loader2 } from 'lucide-react';
+import { Terminal, Cpu, User, Loader2, HardHat } from 'lucide-react';
 
 interface ChatInterfaceProps {
   messages: Message[];
@@ -30,6 +30,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, isLoading, onSe
 
   // Filter out system messages to keep the conversation clean
   const visibleMessages = messages.filter(m => m.role !== 'system');
+
+  const getRoleIcon = (role: string) => {
+    switch (role) {
+      case 'user': return <User size={14} />;
+      case 'builder': return <HardHat size={14} />;
+      default: return <Cpu size={14} />;
+    }
+  };
+
+  const getRoleStyles = (role: string) => {
+    switch (role) {
+      case 'user': 
+        return 'bg-indigo-600 text-white rounded-tr-sm';
+      case 'builder':
+        return 'bg-amber-600/20 text-amber-200 border border-amber-600/50 rounded-tl-sm';
+      default: 
+        return 'bg-slate-800 text-slate-200 rounded-tl-sm border border-slate-700';
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-slate-900 rounded-2xl border border-slate-800 shadow-2xl overflow-hidden relative">
@@ -62,16 +81,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, isLoading, onSe
           <div key={msg.id} className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
             {/* Avatar */}
             <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1 
-              ${msg.role === 'user' ? 'bg-indigo-600' : 'bg-slate-700'}`}>
-              {msg.role === 'user' ? <User size={14} /> : <Cpu size={14} />}
+              ${msg.role === 'user' ? 'bg-indigo-600' : msg.role === 'builder' ? 'bg-amber-600' : 'bg-slate-700'}`}>
+              {getRoleIcon(msg.role)}
             </div>
 
             {/* Bubble */}
             <div className={`flex flex-col max-w-[80%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-              <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm
-                ${msg.role === 'user' 
-                  ? 'bg-indigo-600 text-white rounded-tr-sm' 
-                  : 'bg-slate-800 text-slate-200 rounded-tl-sm border border-slate-700'}`}>
+              <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${getRoleStyles(msg.role)}`}>
+                {msg.role === 'builder' && <div className="text-[10px] font-bold uppercase tracking-wider mb-1 text-amber-500">Builder Agent</div>}
                 {msg.content}
               </div>
             </div>

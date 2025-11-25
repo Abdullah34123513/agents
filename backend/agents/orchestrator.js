@@ -16,14 +16,17 @@ Available Tools: {{TOOLS}}
 
 1. "BUILD_TOOL": Use this if the user asks for:
     - A calculation, data processing, or logic task.
-    - Access to **real-time data or external information** (news, weather, stock prices, web search) that you cannot answer with your internal knowledge.
-    - A specific capability not in the "Available Tools" list.
+    - A specific utility NOT covered by Google Search (e.g., generating specific file formats, complex text manipulation).
+    - A capability explicitly not in the "Available Tools" list.
 2. "UPDATE_TOOL": Use this if:
     - The user specifically asks to modify, improve, fix, or change the behavior of an EXISTING tool.
     - The user PROVIDES an API Key, token, or credentials (e.g., "here is my key", "sk-...", "use this api key"). In this case, 'details' should be "Inject this API key: [KEY] into the tool [TOOL_NAME]".
 3. "DELETE_TOOL": Use this if the user specifically asks to delete or remove an EXISTING tool.
-4. "CHAT": Use this for general conversation, OR if you can use an EXISTING tool from the list above without modification.
-   - If the Current System Status is "BUILDING", and the user asks about progress, choose CHAT to answer them patiently.
+4. "CHAT": Use this for:
+    - General conversation.
+    - Questions about current events, news, or general knowledge (Use your built-in Google Search).
+    - Executing an EXISTING tool from the list.
+    - If the Current System Status is "BUILDING", and the user asks about progress.
 
 Output JSON: 
 { 
@@ -50,8 +53,8 @@ export const orchestrator = {
     if (!session) {
       session = {
         history: [
-          { role: 'user', parts: [{ text: "System: You are Nexus. You work with a Builder Agent. If you lack a capability (like fetching news), you should build a tool for it." }] },
-          { role: 'model', parts: [{ text: "Understood. I am the Main Agent. I will coordinate with the Builder to expand my capabilities." }] }
+          { role: 'user', parts: [{ text: "System: You are Nexus. You have access to Google Search for real-time info, and a Builder Agent to code custom tools." }] },
+          { role: 'model', parts: [{ text: "Understood. I am the Main Agent. I can search the web or build tools." }] }
         ],
         status: 'IDLE' // IDLE | BUILDING
       };
@@ -105,8 +108,8 @@ export const orchestrator = {
         
         // Immediate Response
         const responseText = isUpdate 
-           ? `I've asked the Builder to update "${decision.toolName}". I'll let you know when it's done.`
-           : `I've instructed the Builder to create a new tool for that. You can continue chatting with me while it works.`;
+           ? `I've asked the Builder to update "${decision.toolName}".`
+           : `I've instructed the Builder to create that tool. You can keep chatting with me while it works.`;
         
         sendEvent({ type: 'text', content: responseText });
         sendEvent({ type: 'done' }); // Close the HTTP request immediately
@@ -140,20 +143,25 @@ export const orchestrator = {
             try {
               // Delegate to Builder
               const buildResult = await builder.buildAndVerify(builderRequirement, (log) => {
-                 broadcastEvent(log);
+                 // Check if the Builder wants to talk to the user directly
+                 if (log.type === 'builder_talk') {
+                     broadcastEvent({ type: 'text', role: 'builder', content: log.content });
+                 } else {
+                     broadcastEvent(log);
+                 }
               });
               
               broadcastEvent({ type: 'tool_update', tool: buildResult.tool }); 
               
               if (buildResult.status === 'missing_key') {
+                 // The builder should have already spoken to the user via the callback, 
+                 // but we ensure the status reflects it.
                  broadcastEvent({ 
                     type: 'inter_agent', 
                     from: 'Builder', 
                     to: 'Main Agent', 
-                    content: `I built '${buildResult.tool.name}', but authentication failed. It needs an API Key.` 
+                    content: `Tool '${buildResult.tool.name}' built, but paused due to missing API Key.` 
                  });
-                 // Send a text message via SSE to prompt the user
-                 broadcastEvent({ type: 'text', content: `The tool '${buildResult.tool.name}' is ready, but it needs an API Key to function. Please provide it when you can.` });
               } else {
                  broadcastEvent({ 
                     type: 'inter_agent', 
@@ -165,10 +173,8 @@ export const orchestrator = {
                     type: 'inter_agent', 
                     from: 'Main Agent', 
                     to: 'Builder', 
-                    content: `Acknowledged. I will use it for future requests.` 
+                    content: `Thanks, I've added it to my toolkit.` 
                  });
-                 // Optional: Notify user textually via SSE
-                 // broadcastEvent({ type: 'text', content: `The tool '${buildResult.tool.name}' is now ready to use.` });
               }
 
             } catch (buildError) {
@@ -187,13 +193,19 @@ export const orchestrator = {
       }
 
       // 4. Chat Loop (Execution Phase) - Synchronous for normal chat
+      
+      // Merge registered tools with the native Google Search tool
+      const registeredTools = toolRegistry.getDeclarations().map(d => ({ functionDeclarations: [d] }));
+      const allTools = [
+        ...registeredTools,
+        { googleSearch: {} } // Enable Google Search Grounding for Main Agent
+      ];
+
       const chat = ai.chats.create({
         model: 'gemini-2.5-flash',
         history: session.history,
         config: {
-          tools: toolRegistry.getDeclarations().length > 0 
-            ? [{ functionDeclarations: toolRegistry.getDeclarations() }] 
-            : undefined
+          tools: allTools
         }
       });
 
@@ -234,7 +246,12 @@ export const orchestrator = {
           }
         }
         
-        result = await chat.sendMessage({ message: toolOutputs });
+        if (toolOutputs.length > 0) {
+           result = await chat.sendMessage({ message: toolOutputs });
+        } else {
+           // Should not happen if there was a function call, but safeguards infinite loop
+           break;
+        }
       }
 
       const finalText = result.text;

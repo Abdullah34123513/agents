@@ -77,7 +77,7 @@ export const builder = {
    */
   async buildAndVerify(requirement, logCallback = () => {}) {
     let attempts = 0;
-    const maxAttempts = 3; // Reduced to 3 to prevent rate limit exhaustion
+    const maxAttempts = 3; 
     let lastError = null;
     let currentSpec = null;
 
@@ -112,8 +112,12 @@ export const builder = {
           };
         }
 
-        // Step C: Handle Specific Auth Errors
+        // Step C: Handle Specific Auth Errors - TALK TO USER
         if (testResult.isAuthError) {
+           logCallback({ 
+             type: 'builder_talk', 
+             content: `I've built '${currentSpec.toolName}', but I can't test it because it requires an API Key or Authentication. Please provide your key so I can bake it into the tool.` 
+           });
            return {
              tool: toolRegistry.get(currentSpec.toolName),
              status: 'missing_key'
@@ -238,7 +242,7 @@ export const builder = {
 
         // Auth detection
         const msg = e.message.toLowerCase();
-        if (msg.includes('401') || msg.includes('403') || msg.includes('key')) {
+        if (msg.includes('401') || msg.includes('403') || msg.includes('key') || msg.includes('unauthorized')) {
             return { success: false, error: e.message, isAuthError: true };
         }
 
