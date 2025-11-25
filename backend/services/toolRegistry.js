@@ -4,19 +4,16 @@ import { Type } from '@google/genai';
 class ToolRegistry {
   constructor() {
     this.tools = new Map();
-    this.store = new Map(); // Simple in-memory persistence
+    this.store = new Map(); 
   }
 
   register(toolSpec) {
-    // 1. Validate Tool Name
     const nameRegex = /^[a-zA-Z_][\w.:-]{0,63}$/;
     
     if (!toolSpec.toolName || !nameRegex.test(toolSpec.toolName)) {
-      console.error(`[Registry] Invalid tool name rejected: '${toolSpec.toolName}'`);
-      throw new Error(`Invalid tool name: '${toolSpec.toolName}'. Names must start with a letter and contain only alphanumerics, underscores, dots, or dashes.`);
+      throw new Error(`Invalid tool name: '${toolSpec.toolName}'.`);
     }
 
-    // Convert simplified JSON schema to Gemini FunctionDeclaration
     const declaration = {
       name: toolSpec.toolName,
       description: toolSpec.description || "No description provided",
@@ -27,7 +24,6 @@ class ToolRegistry {
       }
     };
 
-    // Map properties if they exist
     if (toolSpec.parameters?.properties) {
       for (const [key, val] of Object.entries(toolSpec.parameters.properties)) {
         declaration.parameters.properties[key] = {
@@ -46,7 +42,6 @@ class ToolRegistry {
     };
 
     this.tools.set(tool.name, tool);
-    console.log(`[Registry] Registered tool: ${tool.name}`);
     return tool;
   }
 
@@ -63,11 +58,7 @@ class ToolRegistry {
   }
 
   delete(name) {
-    const existed = this.tools.delete(name);
-    if (existed) {
-      console.log(`[Registry] Deleted tool: ${name}`);
-    }
-    return existed;
+    return this.tools.delete(name);
   }
 
   async execute(name, args) {
@@ -75,41 +66,39 @@ class ToolRegistry {
     if (!tool) throw new Error(`Tool ${name} not found`);
 
     try {
-      // Utilities injected into the sandbox
+      // Capture logs from inside the VM
+      let logs = [];
+      const safeConsole = {
+        log: (...args) => logs.push(args.map(a => String(a)).join(' ')),
+        error: (...args) => logs.push("ERROR: " + args.map(a => String(a)).join(' ')),
+        warn: (...args) => logs.push("WARN: " + args.map(a => String(a)).join(' ')),
+      };
+
       const utils = {
         sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
         uuid: () => Math.random().toString(36).substring(2) + Date.now().toString(36),
         safeJsonParse: (str, fallback) => { try { return JSON.parse(str); } catch { return fallback; } },
-        pick: (obj, keys) => keys.reduce((acc, k) => (k in obj ? { ...acc, [k]: obj[k] } : acc), {}),
-        omit: (obj, keys) => Object.keys(obj).filter(k => !keys.includes(k)).reduce((acc, k) => ({ ...acc, [k]: obj[k] }), {})
       };
 
-      // Execute in a fresh context (Sandbox) with FETCH and common Globals
       const context = vm.createContext({ 
-        console, 
+        console: safeConsole, 
         args, 
-        utils, // New Utils
+        utils, 
         fetch: global.fetch,
         URL: global.URL,
         URLSearchParams: global.URLSearchParams,
         setTimeout: global.setTimeout,
         clearTimeout: global.clearTimeout,
-        setInterval: global.setInterval,
-        clearInterval: global.clearInterval,
         Math: Math,
         Date: Date,
         JSON: JSON,
-        // Expose a simple DB for persistence across tool calls
         db: {
           get: (k) => this.store.get(k),
           set: (k, v) => this.store.set(k, v),
-          delete: (k) => this.store.delete(k),
-          list: () => Array.from(this.store.keys()),
-          clear: () => this.store.clear()
+          delete: (k) => this.store.delete(k)
         }
       });
 
-      // Wrap code in an async IIFE
       const code = `(async function() { 
         try {
           ${tool.implementation}
@@ -118,12 +107,11 @@ class ToolRegistry {
         }
       })()`;
       
-      // Run and await the promise
       const result = await vm.runInContext(code, context);
       return result;
     } catch (error) {
-      console.error(`[Registry] Execution failed for ${name}:`, error);
-      throw new Error(error.message); // Clean message for builder
+      // Clean up stack trace to hide VM internals from the LLM
+      throw new Error(`Runtime Error in '${name}': ${error.message}`);
     }
   }
 

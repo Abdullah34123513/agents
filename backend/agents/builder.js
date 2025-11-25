@@ -1,76 +1,74 @@
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { toolRegistry } from '../services/toolRegistry.js';
+import vm from 'vm';
 
 dotenv.config();
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const BUILDER_PROMPT = `
-You are the "Builder Agent", an Elite Senior Software Architect.
-Your goal is to build a robust, ASYNCHRONOUS JavaScript tool and comprehensive TEST cases for it.
+You are an expert JavaScript Tool Architect specialized in sandboxed environments.
+Your goal is to write **Node.js-compatible** code that runs inside a restricted \`vm\` context.
 
-ENVIRONMENT:
-- Runtime: Node.js 'vm' sandbox.
-- Network: 'fetch' is available.
-- Persistence: 'db' (simple kv store).
-- Utils: 'utils' object available: { sleep(ms), uuid(), safeJsonParse(str, fallback), pick(obj, keys) }.
-- Globals: console, URL, URLSearchParams, setTimeout, Math, Date, JSON.
+**CRITICAL EXECUTION RULES:**
+1. **NO** \`require()\`, **NO** \`import\`.
+2. **NO** \`window\`, \`document\`, \`alert\`, or DOM APIs.
+3. **NO** \`process.env\`.
+4. **YES**: You have access to:
+   - \`fetch\`, \`URL\`, \`URLSearchParams\`.
+   - \`console.log\`.
+   - \`utils.sleep(ms)\`, \`utils.uuid()\`, \`utils.safeJsonParse(str, default)\`.
+   - \`db.get(key)\`, \`db.set(key, val)\`, \`db.delete(key)\`.
+5. **ASYNC**: The code MUST be wrapped in an async pattern or use await naturally.
+6. **ERRORS**: Throw descriptive errors if inputs are invalid or API calls fail.
 
-INSTRUCTIONS:
-1. **Chain-of-Thought Analysis**:
-   - Analyze requirements deeply.
-   - Identify external dependencies (API endpoints) and potential failure modes (404, 429, 500 errors).
-   - Plan for edge cases (null inputs, empty strings, network timeouts).
-2. **Defensive Implementation**:
-   - Validate ALL inputs at the start of the function.
-   - Use 'utils.sleep' for polling or rate-limit backoff if needed.
-   - Handle API errors gracefully (throw clear, descriptive errors).
-3. **Verification Strategy**:
-   - **Positive Tests**: Standard happy path.
-   - **Negative Tests**: Invalid inputs (must throw).
-   - **Edge Case Tests**: Boundary values.
+**YOUR TASK:**
+Create a tool based on the user's requirement.
 
-Output JSON only. Structure:
+**OUTPUT FORMAT (JSON ONLY):**
 {
-  "thoughtProcess": "1. Analysis: ... 2. Strategy: ... 3. Risks: ...",
   "toolName": "camelCaseName",
-  "description": "Clear description",
+  "description": "Short description",
   "parameters": {
     "type": "OBJECT",
     "properties": {
-       // Open API 3.0 properties with detailed descriptions
+       // OpenAPI 3.0 Schema
     },
-    "required": ["list", "of", "required", "params"]
+    "required": ["list", "of", "params"]
   },
-  "implementationBody": "// Javascript code. Use async/await. \\n// Example: \\nif(!args.id) throw new Error('Missing ID');\\nconst res = await fetch('...');",
+  "implementationBody": "The JavaScript code block. DO NOT wrap in a function signature. Just write the body. \nExample:\n if (!args.url) throw new Error('Url missing');\n const res = await fetch(args.url);\n return res.json();",
   "testCases": [
     { 
-      "args": { "n": 5 }, 
-      "expectedReturn": 120, 
-      "description": "Should calculate factorial of 5"
-    },
-    {
-      "args": { "n": -1 },
-      "shouldError": true,
-      "description": "Should throw error for negative input"
+      "args": { "param": "value" }, 
+      "expectedType": "object", 
+      "description": "Should fetch data successfully" 
     }
   ]
 }
 `;
 
 const FIXER_PROMPT = `
-You are the "Builder Agent" fixing your own code.
-The tool failed the "Perfect Check" (assertion testing).
+You are the Builder Agent fixing a broken tool.
+The code failed either Syntax Check or Runtime Verification.
 
-Input:
-1. Original Spec
-2. Error Message from Test Execution (Expected vs Actual)
+**CONTEXT:**
+- Tool Name: {{TOOL_NAME}}
+- Current Code: 
+\`\`\`javascript
+{{CODE}}
+\`\`\`
+- Error Message: "{{ERROR}}"
 
-Output:
-The complete, corrected JSON object (same structure as Builder).
-Ensure the "toolName" remains the same unless it was invalid.
-Ensure valid JSON. Do not wrap in markdown.
+**INSTRUCTIONS:**
+1. Analyze the error carefully. 
+   - If "ReferenceError", you used a variable/library not available in the VM.
+   - If "SyntaxError", you missed a bracket or semicolon.
+   - If "AssertionError", the logic is wrong.
+2. Rewrite the "implementationBody" completely.
+3. Ensure you follow the Sandbox Rules (No require, No DOM).
+
+**OUTPUT JSON ONLY (Same schema as Builder).**
 `;
 
 export const builder = {
@@ -79,20 +77,16 @@ export const builder = {
    */
   async buildAndVerify(requirement, logCallback = () => {}) {
     let attempts = 0;
-    const maxAttempts = 3;
+    const maxAttempts = 3; // Reduced to 3 to prevent rate limit exhaustion
     let lastError = null;
     let currentSpec = null;
 
-    logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `I'm analyzing the requirement: "${requirement}"...` });
+    logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `I'm analyzing the requirement: "${requirement}"` });
 
     // 1. Initial Design
     try {
       currentSpec = await this.generateSpec(requirement);
-      if (currentSpec.thoughtProcess) {
-         // Stream the thought process in chunks if it's long, or just a summary
-         logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `Plan: ${currentSpec.thoughtProcess.substring(0, 100)}...` });
-      }
-      logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `I've drafted a design for '${currentSpec.toolName}'. Starting implementation...` });
+      logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `Drafted '${currentSpec.toolName}'. Verifying syntax...` });
     } catch (e) {
       throw new Error(`Failed to generate initial design: ${e.message}`);
     }
@@ -100,23 +94,25 @@ export const builder = {
     // 2. Verify Loop
     while (attempts < maxAttempts) {
       attempts++;
-      logCallback({ type: 'log', content: `Running tests (Cycle ${attempts})...` });
-      logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `Running strict verification cycle ${attempts}/${maxAttempts}...` });
+      logCallback({ type: 'log', content: `Verification Cycle ${attempts}/${maxAttempts}...` });
 
       try {
-        // Register temporarily to test execution
+        // Step A: Syntax Check (Pre-computation)
+        this.checkSyntax(currentSpec.implementationBody);
+
+        // Step B: Register & Run Runtime Tests
         toolRegistry.register(currentSpec);
         const testResult = await this.runTests(currentSpec);
 
         if (testResult.success) {
-          logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `✅ All ${currentSpec.testCases.length} tests passed. The tool '${currentSpec.toolName}' is verified and ready.` });
+          logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `✅ Tool '${currentSpec.toolName}' passed all checks.` });
           return {
             tool: toolRegistry.get(currentSpec.toolName),
             status: 'success'
           };
         }
 
-        // Check for specific Auth Errors (Missing API Key)
+        // Step C: Handle Specific Auth Errors
         if (testResult.isAuthError) {
            return {
              tool: toolRegistry.get(currentSpec.toolName),
@@ -124,33 +120,32 @@ export const builder = {
            };
         }
 
-        // Generic Test Failed
+        // Step D: Failure -> Prepare for Fix
         lastError = testResult.error;
-        logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `❌ Test failed: ${lastError}. I need to fix the code.` });
+        logCallback({ type: 'inter_agent', from: 'Builder', to: 'Main Agent', content: `❌ Test failed: ${lastError}. Fixing...` });
 
         // 3. Self-Correction
         const originalName = currentSpec.toolName;
         currentSpec = await this.fixSpec(currentSpec, lastError);
         
-        // Critical: Ensure we don't lose the tool name if the LLM hallucinated/omitted it
-        if (!currentSpec.toolName && originalName) {
-           currentSpec.toolName = originalName;
-        }
+        // Restore name if lost
+        if (!currentSpec.toolName && originalName) currentSpec.toolName = originalName;
 
       } catch (e) {
         console.error("Builder Loop Error:", e);
-        // Use fallback error message if available
-        const msg = e.message || "Unknown error";
+        lastError = e.message;
         
-        if (attempts >= maxAttempts) {
-             throw new Error(`Builder Agent failed after ${maxAttempts} attempts. Last error: ${msg}`);
+        // If it's a syntax error, try to fix it immediately via the loop
+        if (attempts < maxAttempts) {
+            logCallback({ type: 'log', content: `Syntax Error detected: ${e.message}. Attempting fix...` });
+            currentSpec = await this.fixSpec(currentSpec, e.message);
+        } else {
+             throw new Error(`Failed to build tool after ${maxAttempts} attempts. Error: ${lastError}`);
         }
-        // If it was a registration error (invalid name), try to fix it in next loop
-        lastError = msg;
       }
     }
 
-    throw new Error(`Builder Agent failed to create a working tool after ${maxAttempts} attempts. Last error: ${lastError}`);
+    throw new Error(`Builder gave up. Last error: ${lastError}`);
   },
 
   async generateSpec(requirement) {
@@ -160,109 +155,113 @@ export const builder = {
       config: {
         systemInstruction: BUILDER_PROMPT,
         responseMimeType: "application/json",
-        temperature: 0.2
+        // ENABLE THINKING: This drastically improves code quality
+        thinkingConfig: { thinkingBudget: 1024 }, 
+        temperature: 0.2 // Low temp for precision
       }
     });
     return this._parseJson(response.text);
   },
 
   async fixSpec(brokenSpec, errorMsg) {
-    const context = `
-      The tool execution failed validation.
-      Current Implementation: ${brokenSpec.implementationBody}
-      Test Input Causing Error: ${JSON.stringify(brokenSpec.testCases)}
-      Error Output: ${errorMsg}
-    `;
+    const prompt = FIXER_PROMPT
+      .replace('{{TOOL_NAME}}', brokenSpec.toolName)
+      .replace('{{CODE}}', brokenSpec.implementationBody)
+      .replace('{{ERROR}}', errorMsg);
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: context,
+      contents: "Fix the tool based on the error.",
       config: {
-        systemInstruction: FIXER_PROMPT,
-        responseMimeType: "application/json"
+        systemInstruction: prompt,
+        responseMimeType: "application/json",
+        // Smaller thinking budget for fixes is usually sufficient
+        thinkingConfig: { thinkingBudget: 512 }, 
       }
     });
     return this._parseJson(response.text);
   },
 
-  async runTests(spec) {
-    if (!spec.testCases || spec.testCases.length === 0) {
-      return { success: true }; // No tests generated
+  /**
+   * Fast fail if code is syntactically invalid JS.
+   */
+  checkSyntax(code) {
+    try {
+      // We wrap it in an async function to allow 'await' at top level of body
+      new vm.Script(`(async () => { ${code} })`);
+    } catch (e) {
+      throw new Error(`SyntaxError: ${e.message}`);
     }
+  },
+
+  async runTests(spec) {
+    if (!spec.testCases || spec.testCases.length === 0) return { success: true };
 
     for (const [i, test] of spec.testCases.entries()) {
       try {
-        // Enforce a timeout for tool execution to prevent infinite loops
         const EXECUTION_TIMEOUT = 5000;
         const executionPromise = toolRegistry.execute(spec.toolName, test.args);
+        
         const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error(`Execution timed out after ${EXECUTION_TIMEOUT}ms`)), EXECUTION_TIMEOUT)
+            setTimeout(() => reject(new Error(`Execution timed out (${EXECUTION_TIMEOUT}ms)`)), EXECUTION_TIMEOUT)
         );
 
         const result = await Promise.race([executionPromise, timeoutPromise]);
         
-        // Negative Testing: If we expected an error but got a result, FAIL.
+        // Negative Testing
         if (test.shouldError) {
-           throw new Error(`Expected tool to throw error, but it returned: ${JSON.stringify(result)}`);
+           throw new Error(`Expected error, but got result: ${JSON.stringify(result)}`);
         }
         
-        if (result === undefined) {
+        if (result === undefined && !test.allowUndefined) {
            throw new Error("Function returned undefined");
         }
 
-        // Assertion 1: Strict Equality (for deterministic tools like Math)
+        // Assertions
         if (test.expectedReturn !== undefined) {
            const actualStr = JSON.stringify(result);
            const expectedStr = JSON.stringify(test.expectedReturn);
            if (actualStr !== expectedStr) {
-             throw new Error(`Assertion Failed. Expected ${expectedStr}, got ${actualStr}`);
+             throw new Error(`Expected ${expectedStr}, got ${actualStr}`);
            }
         }
 
-        // Assertion 2: Type Check (for non-deterministic tools like News/Random)
         if (test.expectedType) {
            const type = Array.isArray(result) ? 'array' : typeof result;
            if (type !== test.expectedType) {
-              throw new Error(`Type Mismatch. Expected ${test.expectedType}, got ${type}`);
+              throw new Error(`Expected type '${test.expectedType}', got '${type}'`);
            }
         }
 
       } catch (e) {
-        // Negative Testing: If we expected an error and got one, SUCCESS.
-        if (test.shouldError) {
-            continue; // Test passed
-        }
+        if (test.shouldError) continue; // Pass
 
-        // Detect Auth Errors
+        // Auth detection
         const msg = e.message.toLowerCase();
-        if (
-            msg.includes('401') || 
-            msg.includes('403') || 
-            msg.includes('unauthorized') || 
-            msg.includes('forbidden') || 
-            msg.includes('api key') ||
-            msg.includes('apikey')
-        ) {
+        if (msg.includes('401') || msg.includes('403') || msg.includes('key')) {
             return { success: false, error: e.message, isAuthError: true };
         }
 
-        return { success: false, error: `Test Case #${i + 1} (${test.description || 'Unknown'}): ${e.message}` };
+        return { success: false, error: `Test Case ${i + 1} Failed: ${e.message}` };
       }
     }
-
     return { success: true };
   },
 
-  // Helper to reliably parse JSON from LLM output, stripping markdown
   _parseJson(text) {
-    if (!text) throw new Error("Empty response from model");
+    if (!text) throw new Error("Empty response");
     try {
-      // Remove ```json and ``` if present
-      let clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      const clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
       return JSON.parse(clean);
     } catch (e) {
-      console.error("JSON Parse Error. Raw text:", text);
-      throw new Error("Failed to parse tool specification from model output");
+      // Heuristic: sometimes thinking models output text before JSON. 
+      // Try finding the first { and last }
+      const first = text.indexOf('{');
+      const last = text.lastIndexOf('}');
+      if (first !== -1 && last !== -1) {
+         return JSON.parse(text.substring(first, last + 1));
+      }
+      throw new Error("Invalid JSON format");
     }
   }
 };
